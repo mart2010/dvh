@@ -63,22 +63,21 @@ class Base(object):
 
 class DVModel(Base):
 
-    def __init__(self, tables_dic):
-        self.tables = tables_dic
-        self.names_ddl_order = self.names_creation_order()
+    def validate(self):
+        for o in self.tables.values():
+            for err in o.validate():
+                yield err
 
-    def names_creation_order(self):
-        names_ordered = []
+    def tables_in_creation_order(self):
         for k, _ in sorted(self.tables.items(), key=lambda kv: kv[1].sort_order + kv[0]):
             # print("ddl order key:" + k)
-            names_ordered.append(k)
-        return names_ordered
+            yield k
 
     def generate_ddl(self, with_drop=False):
         if with_drop:
-            for n in reversed(self.names_ddl_order):
+            for n in reversed(self.tables_in_creation_order()):
                 print("I will drop: " + n)
-        for n in self.names_ddl_order:
+        for n in self.names_ddl_order():
             print("I will create DDL for: " + n)
 
     # def __repr__(self):
@@ -95,24 +94,16 @@ class Hub(Base):
 
     def validate(self):
         if self.nat_keys is None or len(self.nat_keys) == 0:
-            raise ValueError("Hub must have at least one 'nat_keys'")
-
-        if self.sur_key is None:
+            yield "Hub must have at least one 'nat_keys'"
+        elif self.sur_key is None:
             if len(self.nat_keys) > 1:
-                raise ValueError("Hub without 'sur_key' must have a unique 'nat_keys'")
-        elif len(self.sur_key.values()) > 1:
-            raise ValueError("Only one 'sur_key' definition is possible")
+                yield "Hub without 'sur_key' must only have one 'nat_keys'"
         else:
-            sk_def = list(self.sur_key.values())
-            if sk_def[0].get('sequence') is None:
-                raise ValueError("Hub's 'sur_key' requires a 'sequence' definition")
-
+            if self.sur_key.get('sequence') is None:
+                yield "Hub with 'sur_key' must have a 'sequence' definition"
 
     def get_primarey_key(self):
         pass
-
-    #def __repr__(self):
-    #    return '%s(keys=%r, surrogate_key=%r)' % (self.__class__.__name__, self.keys, self.surrogate_key)
 
     def __eq__(self, other):
         if not isinstance(other, Hub):
@@ -120,41 +111,43 @@ class Hub(Base):
         return self.keys == other.keys and self.surrogate_key == other.surrogate_key
 
 
-class Sat(Base):
+class Link(Base):
     sort_order = '2'
 
-    def __init__(self, atts, hub):
-        super().__init__()
-        if not isinstance(hub, Hub):
-            raise ValueError("Satellite must refer to one Hub")
-        self.atts = atts
-        self.hub = hub
+    def validate(self):
+        if self.hubs is None or len(self.hubs) < 2:
+            yield "Link must refer to two or more Hubs"
+        else:
+            for h in self.hubs:
+                if not(isinstance(h, Hub)):
+                    yield "Only Hub type can be referred to by Link"
+        if self.sur_key is None:
+            yield "Link must have one 'sur_key'"
+        elif self.sur_key.get('sequence') is None:
+            yield "'sur_key' in Link must have a 'sequence' definition"
 
-    #def __repr__(self):
-    #    return '%s(atts=%r, hub=%r)' % (self.__class__.__name__, self.atts, self.hub)
+    def __eq__(self, other):
+        if not isinstance(other, Link):
+            return False
+        return self.hubs == other.hubs
+
+
+class Sat(Base):
+    sort_order = '3'
+
+    def validate(self):
+        if self.hub is None:
+            yield "Satellite must refer to one 'hub'"
+        if self.atts is None or len(self.atts) < 1:
+            yield "Satellite must have at least one attribute in 'atts'"
+        if self.lfc_dts is None:
+            yield "Satellite must have a 'lfc_dts' for lifecycle date/timestamp'"
 
     def __eq__(self, other):
         if not isinstance(other, Sat):
             return False
         return self.atts == other.atts and self.hub == other.hub
 
-
-class Link(Base):
-    sort_order = '3'
-
-    def __init__(self, hubs):
-        super().__init__()
-        if len(hubs) < 2 or not(isinstance(hubs[0], Hub) and isinstance(hubs[1], Hub)):
-            raise ValueError("Link '{0}' must refer to two or more Hubs".format(self.name))
-        self.hubs = hubs
-
-    #def __repr__(self):
-    #    return '%s(hubs=%r)' % (self.__class__.__name__, self.hubs)
-
-    def __eq__(self, other):
-        if not isinstance(other, Link):
-            return False
-        return self.hubs == other.hubs
 
 
 class SatLink(Base):
@@ -166,9 +159,6 @@ class SatLink(Base):
             raise ValueError("SatLink must refer to one Link")
         self.atts = atts
         self.link = link
-
-    #def __repr__(self):
-    #    return '%s(atts=%r, link=%r)' % (self.__class__.__name__, self.atts, self.link)
 
     def __eq__(self, other):
         if not isinstance(other, SatLink):

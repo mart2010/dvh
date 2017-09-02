@@ -17,75 +17,131 @@ def simple_model():
     return DVModel({'sl1': sl1, 's21': s21, 'h2': h2, 'h1': h1, 's11': s11, 's12': s12, 'l': l})
 
 
-def test_default_att():
+def tst_default_att():
 
     y_t = """
         !Hub
-          nat_keys:
-            h1_id: {type: number, size: 9}
-            h2_id: {type: date} 
+            nat_keys:
+                h1_id: {type: number, size: 9}
+                h2_id: {type: date} 
         """
     h = yaml.load(y_t)
     assert h.sur_key is None
     assert h.nat_keys['h1_id']['type'] == 'number'
     assert h.nat_keys['h1_id']['size'] == 9
-    print(repr(h))
+    #print(repr(h))
 
 
-def test_error_hub():
+def expect_err_msg(yaml_txt, msgs_like, nb_expected=1):
+    s_o = yaml.load(yaml_txt)
+    #print(repr(s_o))
+    msgs = list(s_o.validate())
+    print("resulted msg are: " + str(msgs))
+    assert len(msgs) == nb_expected
+    for i, msg_like in enumerate(msgs_like):
+        assert msgs[i].find(msg_like) >= 0
+    return s_o
 
-    def expect_exception(yaml_txt):
-        s_o = yaml.load(yaml_txt)
-        with pytest.raises(Exception):
-            s_o.validate()
-        return s_o
+
+def tst_hub():
 
     no_nat_keys = """
         !Hub
-          natt_keyys:
-            n_id: {type: number, size: 9}   
+            natt_keyys:
+                n_id: {type: number, size: 9}   
         """
-    expect_exception(no_nat_keys)
+    expect_err_msg(no_nat_keys, ["Hub must have"])
 
     sur_key_no_seq = """
         !Hub
-          nat_keys:
-            h_id: {type: number, size: 9}
-          sur_key:
-            h_key: {seqq: 'wrong name'} 
+            nat_keys:
+                h_id: {type: number, size: 9}
+            sur_key: {name: h_key, seqq: 'wrong name'} 
         """
-    s_o = expect_exception(sur_key_no_seq)
+    expect_err_msg(sur_key_no_seq, ["'sequence'"])
 
     two_nat_keys_no_sur = """
         !Hub
-          nat_keys:
-            h_id1: {type: number, size: 9}
-            h_id2: {type: number, size: 9}
+            nat_keys:
+                h_id1: {type: number, size: 9}
+                h_id2: {type: number, size: 9}
         """
-    t_o = expect_exception(two_nat_keys_no_sur)
-
-    two_sur_keys = """
-        !Hub
-          nat_keys:
-            h_id1: {type: number, size: 9}
-          sur_key:
-            h_key: {seqq: 'wrong name'} 
-            h2_key: {wrong: 1}
-        """
-    t_s = expect_exception(two_sur_keys)
+    expect_err_msg(two_nat_keys_no_sur, ["without 'sur_key'"])
 
     no_error = """
         !Hub
-          nat_keys:
-            h_id1: {type: number, size: 9}
-            h_id2: {type: number, size: 9}
-          sur_key:
-            h_key1: {type: number, size: 9, sequence: my_seq}
+            nat_keys:
+                h_id1: {type: number, size: 9}
+                h_id2: {type: number, size: 9}
+            sur_key: {name: h_key1, type: number, size: 9, sequence: my_seq}
         """
     no_o = yaml.load(no_error)
-    print(repr(no_o))
     no_o.validate()
 
+def tst_link():
+    dv_txt = """
+       !DVModel
+       tables: 
+            h1: &h1 !Hub
+                nat_keys: 
+                    h1_id: {type: number}
+            h2: !Hub &h2
+                nat_keys: 
+                    h2_id: {type: number}                 
+    """
+
+    l_one_hub = dv_txt + """
+            l1: !Link
+                hubs: [*h1]
+    """
+    expect_err_msg(l_one_hub, ["Link must refer to", "Link must have one 'sur_key'"], 2)
+
+    l_missing_seq  = dv_txt + """
+            l1: !Link
+                hubs: [*h1, *h2]
+                sur_key: {name: h_key1, type: number, size: 9, seqqq: my_seq} 
+    """
+    expect_err_msg(l_missing_seq, ["must have a 'sequence'"])
+
+    no_error = dv_txt + """
+            l1: !Link
+                hubs: [*h1, *h2]
+                sur_key: {sequence: my_seq}     
+    """
+    no_er_ob = yaml.load(no_error)
+    no_er_ob.validate()
+
+def test_sat():
+    dv_txt = """
+       !DVModel
+       tables: 
+            h1: &h1 !Hub
+                nat_keys: 
+                    h1_id: {type: number}
+    """
+
+    s_no_atts = dv_txt + """
+            s1: !Sat 
+                hub: *h1 
+    """
+    expect_err_msg(s_no_atts, ["must have at least one attribute", "must have a 'lfc_dts'"], 2)
+
+    s_no_hub = dv_txt + """
+            s1: !Sat
+                atts:
+                    att1: {type: number}
+    """
+    expect_err_msg(s_no_hub, ["must refer to one 'hub'", "must have a 'lfc_dts'"], 2)
+
+    no_error = dv_txt + """
+            s1: !Sat 
+                hub: *h1 
+                atts:
+                    att1: {type: number}
+                lfc_dts: {name: valid_from, type: date}
+    """
+    no_ob = yaml.load(no_error)
+    no_ob.validate()
 
 
 def tst_roundtrip(simple_model):
