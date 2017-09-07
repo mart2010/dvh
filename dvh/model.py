@@ -102,8 +102,17 @@ class Hub(Base):
             if self.sur_key.get('sequence') is None:
                 yield "Hub with 'sur_key' must have a 'sequence' definition"
 
-    def get_primarey_key(self):
-        pass
+    def primary_key(self):
+        if self.sur_key:
+            return self.sur_key['name']
+        else:
+            return list(self.nat_keys.keys())[0]
+
+    def unique_keys(self):
+        if self.sur_key:
+            return list(self.nat_keys.keys())
+        else:
+            return None
 
     def __eq__(self, other):
         if not isinstance(other, Hub):
@@ -141,24 +150,23 @@ class Sat(Base):
         if self.atts is None or len(self.atts) < 1:
             yield "Satellite must have at least one attribute in 'atts'"
         if self.lfc_dts is None:
-            yield "Satellite must have a 'lfc_dts' for lifecycle date/timestamp'"
+            yield "Satellite must have a 'lfc_dts' for lifecycle date/timestamp management"
 
     def __eq__(self, other):
         if not isinstance(other, Sat):
             return False
         return self.atts == other.atts and self.hub == other.hub
 
-
-
 class SatLink(Base):
     sort_order = '4'
 
-    def __init__(self, atts, link):
-        super().__init__()
-        if not isinstance(link, Link):
-            raise ValueError("SatLink must refer to one Link")
-        self.atts = atts
-        self.link = link
+    def validate(self):
+        if self.link is None:
+            yield "Sat-Link must refer to one 'link'"
+        if self.atts is None or len(self.atts) < 1:
+            yield "Sat-Link must have at least one attribute in 'atts'"
+        if self.lfc_dts is None:
+            yield "Sat-Link must have a 'lfc_dts' for lifecycle date/timestamp management"
 
     def __eq__(self, other):
         if not isinstance(other, SatLink):
