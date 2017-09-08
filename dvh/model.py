@@ -35,10 +35,17 @@ def validate_name(col_or_table, vtype="Table"):
 # mettre les elements (qui ont valeurs par defaut) explicites de le code en relation avec les var dans les mapping default
 
 
-class Base(object):
+class ModelBase(object):
 
+    def define_name(self, name):
+        self.name = name
+    
     def validate(self):
         raise NotImplementedError
+        
+    def validate_mapping(self):
+        raise NotImplementedError
+        
 
     # yaml.load() is not using __init__, so default attribute are generated dynamically
     def __getattr__(self, name):
@@ -61,15 +68,28 @@ class Base(object):
         return self.__repr__()
 
 
-class DVModel(Base):
+class DVModel(ModelBase):
 
+    def init_tables(self):
+        for k, v in self.tables.items():
+            v.define_name(k)
+    
+    
     def validate(self):
         for o in self.tables.values():
             for err in o.validate():
                 yield err
 
+    def validate_mapping(self):
+        """Assumption is the object definition is satisfied (i.e. validate() is called prior to this one
+        """
+        for o in self.tables.values():
+            for err in o.validate_mapping():
+                yield err
+                
+                
     def tables_in_creation_order(self):
-        for k, _ in sorted(self.tables.items(), key=lambda kv: kv[1].sort_order + kv[0]):
+        for k, _ in sorted(self.tables.items(), key=lambda kv: kv[1].creation_order + kv[0]):
             # print("ddl order key:" + k)
             yield k
 
@@ -89,19 +109,9 @@ class DVModel(Base):
         return self.tables == other.tables
 
 
-class Hub(Base):
-    sort_order = '1'
-
-    def validate(self):
-        if self.nat_keys is None or len(self.nat_keys) == 0:
-            yield "Hub must have at least one 'nat_keys'"
-        elif self.sur_key is None:
-            if len(self.nat_keys) > 1:
-                yield "Hub without 'sur_key' must only have one 'nat_keys'"
-        else:
-            if self.sur_key.get('sequence') is None:
-                yield "Hub with 'sur_key' must have a 'sequence' definition"
-
+class Hub(ModelBase):
+    creation_order = '1'
+                
     def primary_key(self):
         if self.sur_key:
             return self.sur_key['name']
@@ -114,35 +124,85 @@ class Hub(Base):
         else:
             return None
 
+    def validate(self):
+        if self.nat_keys is None or len(self.nat_keys) == 0:
+            yield "Hub must have at least one 'nat_keys'"
+        if self.sur_key is None and len(self.nat_keys) > 1:
+                yield "Hub without 'sur_key' can only have one 'nat_keys'"
+
+    def validate_mapping(self):
+        if self.src is None:
+            yield "Hub mapping requires a 'src' attribute for sourcing"
+        #assumption: validate() enforces the presence of nat_keys
+        for v in self.nat_keys.values():
+            if v.get('src') is None:
+                yield "Hub with 'src' mapping must also specify one 'src' mapping for every 'nat_keys'"
+        if self.sur_key and self.sur_key.get('src') is None:
+            yield "Hub with one 'sur_key' must also specify a 'src' for its mapping (ex. for a sequence: seq.nextval())"
+
     def __eq__(self, other):
         if not isinstance(other, Hub):
             return False
-        return self.keys == other.keys and self.surrogate_key == other.surrogate_key
+        return  self.name == other.name and self.keys == other.keys and self.surrogate_key == other.surrogate_key
 
 
-class Link(Base):
-    sort_order = '2'
+class Link(ModelBase):
+    creation_order = '2'
 
+    def surrogate_key(self):
+        if self.sur_key:
+            return self.sur_key['name']
+        else:
+        # default (plus tard, se baser sur un objet "top-default" (mis dans le yaml DVModel) si défini, sinon retour val suivante:)
+            return self.name + "_key"
+    
+    def foreign_keys(self):
+        f_ks = []
+        if self.for_keys:
+            for k_d in self.for_keys:
+                f_ks.append(k_d['name'])
+        else:
+            for h in self.hubs:
+                # plus tard se baser sur un top-défaut si défini (qui par défaut pourrait mettre cette valeur)
+                f_ks.append(h.primary_key())
+        return f_ks
+            
     def validate(self):
         if self.hubs is None or len(self.hubs) < 2:
-            yield "Link must refer to two or more Hubs"
+            yield "Link must refer to more than one Hub"
         else:
             for h in self.hubs:
                 if not(isinstance(h, Hub)):
-                    yield "Only Hub type can be referred to by Link"
-        if self.sur_key is None:
-            yield "Link must have one 'sur_key'"
-        elif self.sur_key.get('sequence') is None:
-            yield "'sur_key' in Link must have a 'sequence' definition"
+                    yield "Link must refer to Hub type only"
+            if self.for_keys and len(self.for_keys) != len(self.hubs):
+                yield "Link's 'for_keys' mismatch the number of 'hubs'"
+                                
+    def validate_mapping(self):
+        # mapping requires a sur_key 
+        if self.sur_key.get('src') is None:
+            yield "Link mapping requires 'sur_key' with a 'src' for its mapping (ex. a sequence: seq.nextval())"
+        # Using default sourcing from hub
+        if self.src is None:
+            hub_src = set()
+            for h in self.hubs:
+                err_msg = list(h.validate_mapping()) 
+                if len(err_msg) > 0:
+                    yield "Link mapping default has invalid Hub sourcing"
+                else:
+                    hub_src.add(h.src)
+            if len(hub_src) > 1:
+                yield "Link mapping default has Hubs sourcing from different source"
+
+                    
 
     def __eq__(self, other):
         if not isinstance(other, Link):
             return False
-        return self.hubs == other.hubs
+        return self.name == other.name and self.hubs == other.hubs
 
 
-class Sat(Base):
-    sort_order = '3'
+class Sat(ModelBase):
+    creation_order = '3'
 
     def validate(self):
         if self.hub is None:
@@ -155,10 +215,10 @@ class Sat(Base):
     def __eq__(self, other):
         if not isinstance(other, Sat):
             return False
-        return self.atts == other.atts and self.hub == other.hub
+        return self.name == other.name and self.atts == other.atts and self.hub == other.hub
 
-class SatLink(Base):
-    sort_order = '4'
+class SatLink(ModelBase):
+    creation_order = '4'
 
     def validate(self):
         if self.link is None:
@@ -184,4 +244,12 @@ yaml.register_class(SatLink)
 # yaml_tag approach does work for default optional param
 # https://stackoverflow.com/questions/7224033/default-constructor-parameters-in-pyyaml
 # so revert to using own constructor impl
+
+
+class Mapping(object):
+    
+    def __init__(self):
+        pass        
+        
+        
 
