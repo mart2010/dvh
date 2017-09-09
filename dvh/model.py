@@ -1,55 +1,44 @@
 import ruamel.yaml
 
 
-# class Column(yaml.YAMLObject):
-#     yaml_tag = '!Column'
-#
-#     def __init__(self, type, size=None):
-#         # self.name = validate_name(name, 'Column')
-#         self.type = type
-#         self.size = size
-#
-#     def __repr__(self):
-#         return '%s(type=%r, size=%r)' % (self.__class__.__name__, self.type, self.size)
-#
-#     def __eq__(self, other):
-#         if not isinstance(other, Column):
-#             return False
-#         return self.type == other.size and self.size == other.size
+# there will be a few type of errors/warnings:  
+    # - Yaml-related (syntaxic or technical issues causing yaml.load  model to fail ) --> catch e and raise "MyBusiness" from e  done from the model reader..
+    # - Domain/Model rules violation (domain-specific rules) raised from function: validate_model() (ex. a Link requires at least 2 hubs, a hub requires one ore more nat_keys
+    # - invalid/missing attribute for generating DDL, DML... in generate_DDL/DML()...and raised from these (ex. to get PK, I need an 'name' aatribute) --> raise from the proper fct (ex. primary_key) based 
+
+    # 4- Log some warning, when generating code (DDL, DML...) requires falling back to default value  
+
+class BaseError(Exception):
+    pass
 
 
-def validate_name(col_or_table, vtype="Table"):
-    emsg = None
-    if not col_or_table or len(col_or_table) < 1:
-        emsg = "{0} must have non-empty name".format(vtype)
-    elif not col_or_table.isprintable():
-        emsg = "{0} '{1}' not a valid/printable name".format(vtype, col_or_table)
-    if emsg:
-        raise ValueError(emsg)
-    else:
-        return col_or_table
+class ModelRuleError(BaseException):     
+    def __init__(self, obj, msg):
+        self.obj = obj
+        self.msg = msg
+    
+    def __str__(self):
+        return "Model error for {0} '{1}' --> \t{2}".format(self.obj.__class__.__name__, self.obj.name, self.msg)
 
-# Principe mapping (class distincte): on doit ajuster le yaml uniquement, et aucun mapping n'est défini, les DDL/DML seront pris des
-# valeurs par défaut et template par défaut.  On peut soit modifier ces valeurs par défaut ou encore definir de nouveau templates (autre fichier)
-# et de les utiliser en les mettant en agtribut des objet yaml.
-# mettre les elements (qui ont valeurs par defaut) explicites de le code en relation avec les var dans les mapping default
-
+        
+class MappingRuleError(ModelRuleError):
+    def __str__(self):
+        return "Mapping error for {0} '{1}' --> \t{2}".format(self.obj.__class__.__name__, self.obj.name, self.msg)
+    
+        
 
 class ModelBase(object):
 
     def define_name(self, name):
         self.name = name
     
-    def validate(self):
+    def validate_model(self):
         raise NotImplementedError
-        
-    def validate_mapping(self):
-        raise NotImplementedError
-        
+                  
 
     # yaml.load() is not using __init__, so default attribute are generated dynamically
     def __getattr__(self, name):
-        # otherwise yaml fails while accessing: data.__setstate__(state)
+        # otherwise yaml fails when accessing: data.__setstate__(state)
         if name[:2] != '__':
             default = None
             setattr(self, name, default)
@@ -75,18 +64,17 @@ class DVModel(ModelBase):
             v.define_name(k)
     
     
-    def validate(self):
+    def validate_model(self):
+        error = False
         for o in self.tables.values():
-            for err in o.validate():
-                yield err
-
-    def validate_mapping(self):
-        """Assumption is the object definition is satisfied (i.e. validate() is called prior to this one
-        """
-        for o in self.tables.values():
-            for err in o.validate_mapping():
-                yield err
-                
+            try:
+                o.validate_model()
+            except ModelRuleError as err:
+                print(err)
+                error = True
+        if error:
+            raise ModelRuleError("All model-rule error before")
+                                
                 
     def tables_in_creation_order(self):
         for k, _ in sorted(self.tables.items(), key=lambda kv: kv[1].creation_order + kv[0]):
@@ -108,9 +96,19 @@ class DVModel(ModelBase):
             return False
         return self.tables == other.tables
 
+# how to handle default values (i.e. when some att(fct returns None based on yaml):
+    # the idea would be to decorate the function like primary_key(), unique_keys().. 
+    # whose role will be to replace None with a default values
+    # and these defaults would be either obtained in yaml or here in the code when nothing found in yaml
+    # so for now, let's assume that None returned from model is OK
 
+        
 class Hub(ModelBase):
     creation_order = '1'
+    # une idée afin de pouvoir mettre comme test (ds le Parent) que tous les attrs sont acceptés
+    possible_atts = dict(nat_key="Key(s) used for identifying Hub in source, can replace 'sur_key' when unique", \
+                         sur_key= "Auto generated key acting as Primary key (sequence or auto-increment)", \
+                         src="Source to ....")
                 
     def primary_key(self):
         if self.sur_key:
@@ -122,23 +120,14 @@ class Hub(ModelBase):
         if self.sur_key:
             return list(self.nat_keys.keys())
         else:
-            return None
+            return None  
 
-    def validate(self):
+    def validate_model(self):
         if self.nat_keys is None or len(self.nat_keys) == 0:
-            yield "Hub must have at least one 'nat_keys'"
+            raise ModelRuleError(self, "Hub must have at least one 'nat_keys'")
         if self.sur_key is None and len(self.nat_keys) > 1:
-                yield "Hub without 'sur_key' can only have one 'nat_keys'"
+            raise ModelRuleError(self, "Hub without 'sur_key' can only have one 'nat_keys' which becomes Primary key")
 
-    def validate_mapping(self):
-        if self.src is None:
-            yield "Hub mapping requires a 'src' attribute for sourcing"
-        #assumption: validate() enforces the presence of nat_keys
-        for v in self.nat_keys.values():
-            if v.get('src') is None:
-                yield "Hub with 'src' mapping must also specify one 'src' mapping for every 'nat_keys'"
-        if self.sur_key and self.sur_key.get('src') is None:
-            yield "Hub with one 'sur_key' must also specify a 'src' for its mapping (ex. for a sequence: seq.nextval())"
 
     def __eq__(self, other):
         if not isinstance(other, Hub):
@@ -167,33 +156,16 @@ class Link(ModelBase):
                 f_ks.append(h.primary_key())
         return f_ks
             
-    def validate(self):
+    def validate_model(self):
         if self.hubs is None or len(self.hubs) < 2:
-            yield "Link must refer to more than one Hub"
+            raise ModelRuleError(self, "Link must refer to more than one Hub")
         else:
             for h in self.hubs:
                 if not(isinstance(h, Hub)):
-                    yield "Link must refer to Hub type only"
+                    raise ModelRuleError(self, "Link must refer to Hub type only")
             if self.for_keys and len(self.for_keys) != len(self.hubs):
-                yield "Link's 'for_keys' mismatch the number of 'hubs'"
-                                
-    def validate_mapping(self):
-        # mapping requires a sur_key 
-        if self.sur_key.get('src') is None:
-            yield "Link mapping requires 'sur_key' with a 'src' for its mapping (ex. a sequence: seq.nextval())"
-        # Using default sourcing from hub
-        if self.src is None:
-            hub_src = set()
-            for h in self.hubs:
-                err_msg = list(h.validate_mapping()) 
-                if len(err_msg) > 0:
-                    yield "Link mapping default has invalid Hub sourcing"
-                else:
-                    hub_src.add(h.src)
-            if len(hub_src) > 1:
-                yield "Link mapping default has Hubs sourcing from different source"
-
-                    
+                raise ModelRuleError(self, "Link's 'for_keys' mismatch the number of 'hubs'")
+                                                    
 
     def __eq__(self, other):
         if not isinstance(other, Link):
@@ -204,29 +176,30 @@ class Link(ModelBase):
 class Sat(ModelBase):
     creation_order = '3'
 
-    def validate(self):
+    def validate_model(self):
         if self.hub is None:
-            yield "Satellite must refer to one 'hub'"
+            raise ModelRuleError(self, "Satellite must refer to one 'hub'")
         if self.atts is None or len(self.atts) < 1:
-            yield "Satellite must have at least one attribute in 'atts'"
+            raise ModelRuleError(self, "Satellite must have at least one attribute listed under 'atts'")
         if self.lfc_dts is None:
-            yield "Satellite must have a 'lfc_dts' for lifecycle date/timestamp management"
+            raise ModelRuleError(self, "Satellite must have one 'lfc_dts' attribute for lifecycle date/timestamp management")
 
     def __eq__(self, other):
         if not isinstance(other, Sat):
             return False
         return self.name == other.name and self.atts == other.atts and self.hub == other.hub
 
+        
 class SatLink(ModelBase):
     creation_order = '4'
 
-    def validate(self):
+    def validate_model(self):
         if self.link is None:
-            yield "Sat-Link must refer to one 'link'"
+            raise ModelRuleError(self, "Sat-Link must refer to one 'link'")
         if self.atts is None or len(self.atts) < 1:
-            yield "Sat-Link must have at least one attribute in 'atts'"
+            raise ModelRuleError(self, "Sat-Link must have at least one attribute listed under 'atts'")
         if self.lfc_dts is None:
-            yield "Sat-Link must have a 'lfc_dts' for lifecycle date/timestamp management"
+            raise ModelRuleError(self, "Sat-Link must have one 'lfc_dts' attribute for lifecycle date/timestamp management")
 
     def __eq__(self, other):
         if not isinstance(other, SatLink):
@@ -245,11 +218,115 @@ yaml.register_class(SatLink)
 # https://stackoverflow.com/questions/7224033/default-constructor-parameters-in-pyyaml
 # so revert to using own constructor impl
 
+# Generators assume objects satisfy model-rule (validate_model() called prior and raised no Exceptions)
 
-class Mapping(object):
+class DDLGenerator(object):
     
-    def __init__(self):
-        pass        
+    def __init__(self, obj):
+        self.obj = obj
+        
+    def ddl():
+        raise NotImplementedError
         
         
+class DDLGeneratorHub(object):
+    
+    def __init__(self, obj):
+        self.obj = obj
+        # test various condition that must be satified for DDL geneeration
+        # maybe model-rule check enough and nothing to add here?...
+        
+    def ddl():
+        pass
 
+        
+class DDLGeneratorLink(object):
+    
+    def __init__(self, obj):
+        self.obj = obj
+        # test various condition that must be satified for DDL geneeration
+        # maybe model-rule check enough and nothing to add here?...
+        
+    def ddl():
+        pass
+
+        
+class DDLGeneratorSat(object):
+    
+    def __init__(self, obj):
+        self.obj = obj
+        # test various condition that must be satified for DDL geneeration
+        # maybe model-rule check enough and nothing to add here?...
+        
+    def ddl():
+        pass
+
+        
+class DDLGeneratorSatLink(object):
+    
+    def __init__(self, obj):
+        self.obj = obj
+        # test various condition that must be satified for DDL geneeration
+        # maybe model-rule check enough and nothing to add here?...
+        
+    def ddl():
+        pass
+
+    
+class DMLGenerator(object):    
+    def __init__(self, obj):
+        self.obj = obj
+        
+    def dml():
+        raise NotImplementedError
+    
+
+class DMLGeneratorHub(DMLGenerator):
+        
+    def __init__(self, obj):
+        super().__init__(self, obj)
+        
+        if self.obj.src is None:
+            raise MappingRuleError(self.obj, "Hub requires a 'src' mapping needed to generate DML")
+        #Hub validate_model() has enforced the presence of nat_keys
+        for v in self.obj.nat_keys.values():
+            if v.get('src') is None:
+                raise MappingRuleError(self.obj, "Hub with 'src' mapping must also specify one 'src' mapping for every 'nat_keys'")
+        if self.obj.sur_key and self.obj.sur_key.get('src') is None:
+            raise MappingRuleError(self.obj, "Hub with one 'sur_key' must also specify a 'src' for mapping (ex. for a sequence: seq.nextval())")
+    
+
+
+class DMLGeneratorLink(DMLGenerator):
+        
+    def __init__(self, obj):
+        super().__init__(self, obj)
+        # mapping requires a sur_key 
+        if self.obj.sur_key.get('src') is None:
+            yield "Link mapping requires 'sur_key' with a 'src' for its mapping (ex. a sequence: seq.nextval())"
+        # Using default sourcing from hub
+        if self.obj.src is None:
+            hub_src = set()
+            for h in self.obj.hubs:
+                err_msg = list(h.validate_mapping()) 
+                if len(err_msg) > 0:
+                    yield "Link mapping default has invalid Hub sourcing"
+                else:
+                    hub_src.add(h.src)
+            if len(hub_src) > 1:
+                yield "Link mapping default has Hubs sourcing from different source"
+
+            
+class DMLGeneratorSat(DMLGenerator):
+        
+    def __init__(self, obj):
+        super().__init__(self, obj)
+        # todo...
+                
+            
+class DMLGeneratorSatLink(DMLGenerator):
+        
+    def __init__(self, obj):
+        super().__init__(self, obj)
+        # todo...
+                
