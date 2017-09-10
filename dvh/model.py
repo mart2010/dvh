@@ -4,7 +4,7 @@ import ruamel.yaml
 # there will be a few type of errors/warnings:  
     # - Yaml-related (syntaxic or technical issues causing yaml.load  model to fail ) --> catch e and raise "MyBusiness" from e  done from the model reader..
     # - Domain/Model rules violation (domain-specific rules) raised from function: validate_model() (ex. a Link requires at least 2 hubs, a hub requires one ore more nat_keys
-    # - invalid/missing attribute for generating DDL, DML... in generate_DDL/DML()...and raised from these (ex. to get PK, I need an 'name' aatribute) --> raise from the proper fct (ex. primary_key) based 
+    # - SourceMapping: invalid/missing attribute for generating DML... ...and raised from these
 
     # 4- Log some warning, when generating code (DDL, DML...) requires falling back to default value  
 
@@ -21,9 +21,9 @@ class ModelRuleError(BaseException):
         return "Model error for {0} '{1}' --> \t{2}".format(self.obj.__class__.__name__, self.obj.name, self.msg)
 
         
-class MappingRuleError(ModelRuleError):
+class SourceMappingError(ModelRuleError):
     def __str__(self):
-        return "Mapping error for {0} '{1}' --> \t{2}".format(self.obj.__class__.__name__, self.obj.name, self.msg)
+        return "Source Mapping error for {0} '{1}' --> \t{2}".format(self.obj.__class__.__name__, self.obj.name, self.msg)
     
         
 
@@ -61,8 +61,7 @@ class DVModel(ModelBase):
 
     def init_tables(self):
         for k, v in self.tables.items():
-            v.define_name(k)
-    
+            v.define_name(k)    
     
     def validate_model(self):
         error = False
@@ -74,8 +73,7 @@ class DVModel(ModelBase):
                 error = True
         if error:
             raise ModelRuleError("All model-rule error before")
-                                
-                
+                                                
     def tables_in_creation_order(self):
         for k, _ in sorted(self.tables.items(), key=lambda kv: kv[1].creation_order + kv[0]):
             # print("ddl order key:" + k)
@@ -106,7 +104,7 @@ class DVModel(ModelBase):
 class Hub(ModelBase):
     creation_order = '1'
     # une idée afin de pouvoir mettre comme test (ds le Parent) que tous les attrs sont acceptés
-    possible_atts = dict(nat_key="Key(s) used for identifying Hub in source, can replace 'sur_key' when unique", \
+    possible_atts = dict(nat_key="Key(s) used for identifying enitiy Hub in source, can replace 'sur_key' when unique", \
                          sur_key= "Auto generated key acting as Primary key (sequence or auto-increment)", \
                          src="Source to ....")
                 
@@ -273,48 +271,54 @@ class DDLGeneratorSatLink(object):
         pass
 
     
-class DMLGenerator(object):    
+class DMLGenerator(object):
     def __init__(self, obj):
         self.obj = obj
         
-    def dml():
+    def get_source(self):
+        if self.obj.src is None:
+            raise SourceMappingError(self.obj, "'src' attribute required to generate DML".format())
+        return self.obj.src
+        
+    def validate_sourcing(self):
+        raise NotImplementedError
+        
+    def dml(self):
         raise NotImplementedError
     
 
 class DMLGeneratorHub(DMLGenerator):
         
-    def __init__(self, obj):
-        super().__init__(self, obj)
-        
-        if self.obj.src is None:
-            raise MappingRuleError(self.obj, "Hub requires a 'src' mapping needed to generate DML")
+    def validate_sourcing(self):        
+        self.get_source()
         #Hub validate_model() has enforced the presence of nat_keys
         for v in self.obj.nat_keys.values():
             if v.get('src') is None:
-                raise MappingRuleError(self.obj, "Hub with 'src' mapping must also specify one 'src' mapping for every 'nat_keys'")
+                raise SourceMappingError(self.obj, "'src' attribute required for every 'nat_keys'")
         if self.obj.sur_key and self.obj.sur_key.get('src') is None:
-            raise MappingRuleError(self.obj, "Hub with one 'sur_key' must also specify a 'src' for mapping (ex. for a sequence: seq.nextval())")
-    
+            raise SourceMappingError(self.obj, "'sur_key' also required 'src' attribute for mapping (ex. a sequence: seq.nextval())")
+        # etc...
 
+        
+        
 
 class DMLGeneratorLink(DMLGenerator):
-        
-    def __init__(self, obj):
-        super().__init__(self, obj)
-        # mapping requires a sur_key 
+
+    def validate_sourcing(self):
         if self.obj.sur_key.get('src') is None:
-            yield "Link mapping requires 'sur_key' with a 'src' for its mapping (ex. a sequence: seq.nextval())"
+            raise SourceMappingError(self.obj, "'src' attribute required for 'sur_key' (ex. a sequence: seq.nextval())")
         # Using default sourcing from hub
         if self.obj.src is None:
             hub_src = set()
             for h in self.obj.hubs:
-                err_msg = list(h.validate_mapping()) 
-                if len(err_msg) > 0:
-                    yield "Link mapping default has invalid Hub sourcing"
-                else:
-                    hub_src.add(h.src)
+                hub_gen = DMLGeneratorHub(h)
+                try:
+                    hub_gen.validate_sourcing() 
+                except SourceMappingError as e:
+                    raise SourceMappingError(self.obj, "Link sourcing inherited from Hub requires valid Hub sourcing") from e
+                hub_src.add(h.src)
             if len(hub_src) > 1:
-                yield "Link mapping default has Hubs sourcing from different source"
+                raise SourceMappingError(self.obj, "Link sourcing inherited from Hub, requires same source for all Hub")
 
             
 class DMLGeneratorSat(DMLGenerator):
