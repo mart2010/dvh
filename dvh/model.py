@@ -1,3 +1,4 @@
+# coding: utf-8
 import ruamel.yaml
 
 
@@ -12,7 +13,7 @@ class BaseError(Exception):
     pass
 
 
-class ModelRuleError(BaseException):     
+class ModelRuleError(BaseError):     
     def __init__(self, obj, msg):
         self.obj = obj
         self.msg = msg
@@ -35,7 +36,6 @@ class ModelBase(object):
     def validate_model(self):
         raise NotImplementedError
                   
-
     # yaml.load() is not using __init__, so default attribute are generated dynamically
     def __getattr__(self, name):
         # otherwise yaml fails when accessing: data.__setstate__(state)
@@ -49,9 +49,6 @@ class ModelBase(object):
     def __repr__(self):
         atts = ", ".join(["{0}={1}".format(k, repr(v)) for k, v in self.__dict__.items()])
         return "{0}({1})".format(self.__class__.__name__, atts)
-
-    def __ne__(self, other):
-        return not self.__eq__(self, other)
 
     def __str__(self):
         return self.__repr__()
@@ -86,13 +83,6 @@ class DVModel(ModelBase):
         for n in self.names_ddl_order():
             print("I will create DDL for: " + n)
 
-    # def __repr__(self):
-    #     return '%s(tables=%r)' % (self.__class__.__name__, self.tables)
-
-    def __eq__(self, other):
-        if not isinstance(other, DVModel):
-            return False
-        return self.tables == other.tables
 
 # how to handle default values (i.e. when some att(fct returns None based on yaml):
     # the idea would be to decorate the function like primary_key(), unique_keys().. 
@@ -127,12 +117,6 @@ class Hub(ModelBase):
             raise ModelRuleError(self, "Hub without 'sur_key' can only have one 'nat_keys' which becomes Primary key")
 
 
-    def __eq__(self, other):
-        if not isinstance(other, Hub):
-            return False
-        return  self.name == other.name and self.keys == other.keys and self.surrogate_key == other.surrogate_key
-
-
 class Link(ModelBase):
     creation_order = '2'
 
@@ -165,12 +149,6 @@ class Link(ModelBase):
                 raise ModelRuleError(self, "Link's 'for_keys' mismatch the number of 'hubs'")
                                                     
 
-    def __eq__(self, other):
-        if not isinstance(other, Link):
-            return False
-        return self.name == other.name and self.hubs == other.hubs
-
-
 class Sat(ModelBase):
     creation_order = '3'
 
@@ -181,11 +159,6 @@ class Sat(ModelBase):
             raise ModelRuleError(self, "Satellite must have at least one attribute listed under 'atts'")
         if self.lfc_dts is None:
             raise ModelRuleError(self, "Satellite must have one 'lfc_dts' attribute for lifecycle date/timestamp management")
-
-    def __eq__(self, other):
-        if not isinstance(other, Sat):
-            return False
-        return self.name == other.name and self.atts == other.atts and self.hub == other.hub
 
         
 class SatLink(ModelBase):
@@ -198,12 +171,6 @@ class SatLink(ModelBase):
             raise ModelRuleError(self, "Sat-Link must have at least one attribute listed under 'atts'")
         if self.lfc_dts is None:
             raise ModelRuleError(self, "Sat-Link must have one 'lfc_dts' attribute for lifecycle date/timestamp management")
-
-    def __eq__(self, other):
-        if not isinstance(other, SatLink):
-            return False
-        return self.atts == other.atts and self.link == other.link
-
 
 yaml = ruamel.yaml.YAML()
 yaml.register_class(DVModel)
@@ -222,6 +189,9 @@ class DDLGenerator(object):
     
     def __init__(self, obj):
         self.obj = obj
+        
+    def validate_ddl(self):
+        raise NotImplementedError
         
     def ddl():
         raise NotImplementedError

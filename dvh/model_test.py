@@ -1,24 +1,14 @@
+# coding: utf-8
 import pytest
 from dvh.model import *
 import sys
 
 @pytest.fixture
 def simple_model():
-    h1 = Hub({'h1_id': {'type': 'number', 'size': '(6)'}, 'h1_id2': {'type': 'date'}})
-    s11 = Sat({'att1': {'type': 'number', 'size': '(3,2)'}, 'att2': {'type': 'varchar', 'size': '(15)'}}, h1)
-    s12 = Sat({'att1': {'type': 'date'}, 'att2': {'type': 'varchar', 'size': '(15)'}}, h1)
-
-    h2 = Hub({'h2_id': {'type': 'number', 'size': '(9)'}})
-    s21 = Sat({'attx': {'type': 'number', 'size': '(10)'}, 'atty': {'type': 'varchar', 'size': '(15)'}}, h2)
-
-    l = Link([h1, h2])
-    sl1 = SatLink({'attt': {'type': 'date'}}, l)
-
-    return DVModel({'sl1': sl1, 's21': s21, 'h2': h2, 'h1': h1, 's11': s11, 's12': s12, 'l': l})
+    pass
 
 
 def test_default_att():
-
     y_t = """
         !Hub
             nat_keys:
@@ -31,39 +21,31 @@ def test_default_att():
     assert h.nat_keys['h1_id']['size'] == 9
     #print(repr(h))
 
-
-def expect_err_msg(yaml_txt, nb_expected, msgs_like=None, validate_mapping_only=False):
-    s_o = yaml.load(yaml_txt)
-    #print(repr(s_o))
-    if validate_mapping_only:
-        msgs = list(s_o.validate_mapping())
+def callfct(function_call, error_expected=None):
+    if error_expected:
+        with pytest.raises(Exception) as e:
+            function_call()
+            assert e.value.__class__ == error_expected
     else:
-        msgs = list(s_o.validate())
-    print("\nresulted msg are: " + str(msgs))
-    assert len(msgs) == nb_expected
-    if msgs_like:
-        for i, msg_like in enumerate(msgs_like):
-            assert msgs[i].find(msg_like) >= 0
-    if s_o:
-        s_o.init_tables()
-    return s_o
-
-
+        function_call()
+ 
 def tst_hub():
     no_nat_keys = """
         !Hub
             natt_keyyys:
                 n_id: {type: number, size: 9}   
         """
-    expect_err_msg(no_nat_keys, 1, ["Hub must have"])
-
+    s_o = yaml.load(no_nat_keys)
+    callfct(s_o.validate_model, ModelRuleError)
+    
     two_nat_keys_no_sur = """
         !Hub
             nat_keys:
                 h_id1: {type: number, size: 9}
                 h_id2: {type: number, size: 9}
         """
-    expect_err_msg(two_nat_keys_no_sur, 1, ["without 'sur_key'"])
+    s_o = yaml.load(two_nat_keys_no_sur)
+    callfct(s_o.validate_model, ModelRuleError)
 
     no_error = """
         !Hub
@@ -72,31 +54,10 @@ def tst_hub():
                 h_id2: {type: number, size: 9}
             sur_key: {name: h_key1, type: number, size: 9}
         """
-    expect_err_msg(no_error, nb_expected=0)
+    s_o = yaml.load(no_error)
+    callfct(s_o.validate_model)
 
     
-def test_hub_mapping():
-    hub_partial_mapping = """
-        !Hub
-            nat_keys:
-                h_id1: {type: number, size: 9, src: s_id1}
-                h_id2: {type: number, size: 9}
-            sur_key: {name: h_key1, type: number, size: 9}
-            src: src_hub
-        """
-    expect_err_msg(hub_partial_mapping, nb_expected=2, validate_mapping_only=True)
-    
-    hub_ok_mapping = """
-        !Hub
-            nat_keys:
-                h_id1: {type: number, size: 9, src: s_id1}
-                h_id2: {type: number, size: 9, src: s_id2}
-            sur_key: {name: h_key1, type: number, size: 9, src: seq}
-            src: src_hub
-        """
-    expect_err_msg(hub_ok_mapping, nb_expected=0, validate_mapping_only=True)
-
-
 dv_2hubs_txt = \
 """!DVModel
        tables: 
@@ -108,20 +69,21 @@ dv_2hubs_txt = \
                     h2_id: {type: number}                 
 """
  
-def test_link():
-    
+def tst_link(): 
     l_one_hub = dv_2hubs_txt + """
             l1: !Link
                 hubs: [*h1]
     """
-    expect_err_msg(l_one_hub, 1, ["Link must refer"])
+    s_o = yaml.load(l_one_hub)
+    callfct(s_o.validate_model, ModelRuleError)
 
     link_with_default_fkey = dv_2hubs_txt + """
             l1: !Link
                 hubs: [*h1, *h2]
                 sur_key: {name: my_sur}
     """
-    expect_err_msg(link_with_default_fkey, 0)
+    s_o = yaml.load(link_with_default_fkey)
+    callfct(s_o.validate_model, ModelRuleError)
     
     link_with_fkey_mismatch = dv_2hubs_txt + """
             l1: !Link
@@ -129,7 +91,8 @@ def test_link():
                 for_keys: [{name: fk_h1}]
                 sur_key: {name: my_sur}
     """
-    expect_err_msg(link_with_fkey_mismatch, 1)
+    s_o = yaml.load(link_with_fkey_mismatch)
+    callfct(s_o.validate_model, ModelRuleError)
     
     link_with_fkey_ok = dv_2hubs_txt + """
             l1: !Link
@@ -137,8 +100,57 @@ def test_link():
                 for_keys: [{name: fk_h1}, {name: fk_h2}]
                 sur_key: {name: my_sur}
     """
-    expect_err_msg(link_with_fkey_ok, 0)
+    s_o = yaml.load(link_with_fkey_ok)
+    callfct(s_o.validate_model)
+ 
+def test_sat():
+    s_no_atts  = dv_2hubs_txt + """
+            s1: !Sat 
+                hub: *h1 
+    """
+    s_o = yaml.load(s_no_atts)
+    callfct(s_o.validate_model, ModelRuleError)
+
+    s_no_hub = dv_2hubs_txt + """
+            s1: !Sat
+                atts:
+                    att1: {type: number}
+    """
+    s_o = yaml.load(s_no_hub)
+    callfct(s_o.validate_model)
+
+#    no_error = dv_2hubs_txt + """
+#            s1: !Sat 
+#                hub: *h1 
+#                atts:
+#                    att1: {type: number}
+#                lfc_dts: {name: valid_from, type: date}
+#    """
+#    expect_err(no_error, nb_expected=0)
+
+
+def tst_hub_mapping():
+    hub_partial_mapping = """
+        !Hub
+            nat_keys:
+                h_id1: {type: number, size: 9, src: s_id1}
+                h_id2: {type: number, size: 9}
+            sur_key: {name: h_key1, type: number, size: 9}
+            src: src_hub
+        """
+    expect_err(hub_partial_mapping, nb_expected=2, validate_mapping_only=True)
     
+    hub_ok_mapping = """
+        !Hub
+            nat_keys:
+                h_id1: {type: number, size: 9, src: s_id1}
+                h_id2: {type: number, size: 9, src: s_id2}
+            sur_key: {name: h_key1, type: number, size: 9, src: seq}
+            src: src_hub
+        """
+    expect_err(hub_ok_mapping, nb_expected=0, validate_mapping_only=True)
+
+
     
 def tst_link_mapping():
     
@@ -147,48 +159,70 @@ def tst_link_mapping():
                 hubs: [*h1, *h2]
                 sur_key: {name: my_sur, src: my_seq}
     """
-    expect_err_msg(l_hub_no_mapping, 0, validate_mapping_only=True)
+    expect_err(l_hub_no_mapping, 0, validate_mapping_only=True)
     
     l_hub_withfkeys_no_mapping = dv_2hubs_txt + """
             l1: !Link
                 hubs: [*h1, *h2]
-                fkeys: [{name: fk1}, {name: fk2}]
+                for_keys: [{name: fk1}, {name: fk2}]
                 sur_key: {name: my_sur, src: my_seq}
                 src: {name: src_tbl, hubs: [h1_src, h2_src]}, 
     """
     
+
+ddl_template = """
+
+Default:
+    hub:      CREATE TABLE {name}_h (
+              {sur_key} NUMBER(9),
+              {nat_keys} NOT NULL,
+              load_dts DATE NOT NULL,
+              last_seen_date DATE,
+              process_id NUMBER(9),
+              rec_src VARCHAR2(200),
+              CONSTRAINT {name}_pk PRIMARY_KEY ({sur_key}),
+              UNIQUE ({nat_keys})
+              );
     
+    link:     CREATE TABLE {name}_l (
+              {sur_key} NUMBER(9),
+              {for_keys} NUMBER(9) NOT NULL,
+              load_dts NOT NULL,
+              last_seen_date DATE,
+              process_id NUMBER(9),
+              rec_src VARCHAR2(200),
+              CONSTRAINT {name}_pk PRIMARY_KEY ({sur_key}),
+              UNIQUE {for_keys},
+              CONSTRAINT {name}_{hubs.name}_fk FOREIGN KEY ({for_keys}) REFERENCE {hubs.name}_h 
+              );
     
+    sat:      CREATE TABLE {name}_s (
+              {hub.sur_key} NUMBER(9),
+              effective_date DATE NOT NULL,
+              expiration_date DATE NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
+              {atts},
+              process_id NUMBER(9),
+              update_process_id NUMBER(9),
+              rec_src VARCHAR2(200),
+              CONSTRAINT {name}_pk PRIMARY_KEY ({hub.sur_key}, effective_date),
+              CONSTRAINT {name}_{hub.name}_fk FOREIGN KEY ({hub.sur_key}) REFERENCE {hub.name}_h           
+              );
     
-def tst_sat():
-    dv_txt = """
-       !DVModel
-       tables: 
-            h1: &h1 !Hub
-                nat_keys: 
-                    h1_id: {type: number}
-    """
-    s_no_atts = dv_txt + """
-            s1: !Sat 
-                hub: *h1 
-    """
-    expect_err_msg(s_no_atts, 2, ["must have at least one attribute", "must have a 'lfc_dts'"])
-
-    s_no_hub = dv_txt + """
-            s1: !Sat
-                atts:
-                    att1: {type: number}
-    """
-    expect_err_msg(s_no_hub, 2, ["must refer to one 'hub'", "must have a 'lfc_dts'"])
-
-    no_error = dv_txt + """
-            s1: !Sat 
-                hub: *h1 
-                atts:
-                    att1: {type: number}
-                lfc_dts: {name: valid_from, type: date}
-    """
-    expect_err_msg(no_error, nb_expected=0)
+    satlink:  CREATE TABLE {name}_sl (
+              {link.sur_key} NUMBER(9),
+              effective_date DATE NOT NULL,
+              expiration_date DATE NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
+              {atts},
+              process_id NUMBER(9),
+              update_process_id NUMBER(9),
+              rec_src VARCHAR2(200),
+              CONSTRAINT {name}_pk PRIMARY_KEY ({link.sur_key}, effective_date),
+              CONSTRAINT {name}_{link.name}_fk FOREIGN KEY ({hub.sur_key}) REFERENCE {hub.name}_h
+              );
+    
+Sat_with_deletion:
+                
 
 
+"""
 
