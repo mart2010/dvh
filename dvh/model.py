@@ -1,6 +1,6 @@
 # coding: utf-8
 import ruamel.yaml
-
+import re
 
 # there will be a few type of errors/warnings:  
     # - Yaml-related (syntaxic or technical issues causing yaml.load  model to fail ) --> catch e and raise "MyBusiness" from e  done from the model reader..
@@ -21,12 +21,14 @@ class ModelRuleError(BaseError):
     def __str__(self):
         return "Model error for {0} '{1}' --> \t{2}".format(self.obj.__class__.__name__, self.obj.name, self.msg)
 
-        
-class SourceMappingError(ModelRuleError):
+class DefinitionError(BaseError):
     def __str__(self):
-        return "Source Mapping error for {0} '{1}' --> \t{2}".format(self.obj.__class__.__name__, self.obj.name, self.msg)
-    
-        
+        return "Definition error for {0} '{1}' --> \t{2}".format(self.obj.__class__.__name__, self.obj.name, self.msg)
+
+class SourceMappingError(BaseError):
+    def __str__(self):
+        return "Mapping Definition error for {0} '{1}' --> \t{2}".format(self.obj.__class__.__name__, self.obj.name, self.msg)
+
 
 class ModelBase(object):
 
@@ -83,18 +85,11 @@ class DVModel(ModelBase):
         for n in self.names_ddl_order():
             print("I will create DDL for: " + n)
 
-
-# how to handle default values (i.e. when some att(fct returns None based on yaml):
-    # the idea would be to decorate the function like primary_key(), unique_keys().. 
-    # whose role will be to replace None with a default values
-    # and these defaults would be either obtained in yaml or here in the code when nothing found in yaml
-    # so for now, let's assume that None returned from model is OK
-
         
 class Hub(ModelBase):
     creation_order = '1'
-    # une idée afin de pouvoir mettre comme test (ds le Parent) que tous les attrs sont acceptés
-    possible_atts = dict(nat_key="Key(s) used for identifying enitiy Hub in source, can replace 'sur_key' when unique", \
+    # une idée afin de pouvoir mettre comme test (ds le Parent) que tous les attrs soIEnt VALIDES
+    ATTS_SUPPORTED= dict(nat_key="Key(s) used for identifying enitiy Hub in source, can replace 'sur_key' when unique", \
                          sur_key= "Auto generated key acting as Primary key (sequence or auto-increment)", \
                          src="Source to ....")
                 
@@ -187,17 +182,78 @@ yaml.register_class(SatLink)
 
 class DDLGenerator(object):
     
-    def __init__(self, obj):
-        self.obj = obj
+    # ddl_templates is a dict read off from yaml file (either inside model or separate file and easily customize by user)
+    def __init__(self, dv_model, ddl_templates):
+        self.dv_model = dv_model
+        # standardize all keys to be case insensitive
+        for key, value in ddl_templates:
+            ddl_templates.setdefault(key.lower(), value) 
+        self.ddl_templates = ddl_templates
+    
+    def ddl_template(self, dv_obj):
+        # custom template 
+        if dv_obj.ddl_template:
+            template = self.ddl_templates.get(dv_obj.ddl_template.lower())
+        else:
+            template = self.ddl_templates.get(dv_obj.__class__.lower())
+        if template is None:
+            raise DefinitionError(dv_obj, "DDL template '{0}' definition not found".format(template))
+        return template
+    
         
     def validate_ddl(self):
         raise NotImplementedError
         
     def ddl():
         raise NotImplementedError
+
+        
+class DDLBase(object):
+    
+    # create static constructor based on type of object...
+    # todo
+    
+    def __init__(self, dv_obj, template):
+        self.dv_obj
+        self.template = template
+    
+    def keywords_found(self):
+        regex_kw = re.compile("{(\w+_*)}")
+        return regex_kw.findall(self.template)
+        
+    def resolve_keyword(self, keyword):
+        def try_resolve(obj, attr):
+            # don't need to try:/except:  dv object do not raise AttributeError on missing attribute 
+            value = getattr(obj, attr)
+            if value is None:
+                raise DefinitionError(self.dv_obj, "DDL attribute '{0}' in template {1} not resolvable".format(attr, self.template))
+            return value                
+        
+        kw = keyword.split(".")
+        if  len(kw) > 2:
+            raise DefinitionError(self.dv_obj, "DDL template attribute '{0}' is not valid".format(keyword))
+        elif len(kw) == 1:
+            value = self.try_resolve(self.dv_obj, keyword)
+        # one "."
+        else:
+            parent = self.try_resolve(self.dv_obj, kw[0])
+            # to do check if containers...
+            if type(parent) is list:
+                value = [self.try_resolve(child, kw[1]) for child in parent]
+            else:
+                value = try_resolve(parent, kw[1])    
+        return value
+  
         
         
-class DDLGeneratorHub(object):
+        
+class DDLHub(DDLBase):
+            
+    def ddl(self):
+        pass
+
+        
+class DDLLink(object):
     
     def __init__(self, obj):
         self.obj = obj
@@ -208,7 +264,7 @@ class DDLGeneratorHub(object):
         pass
 
         
-class DDLGeneratorLink(object):
+class DDLSat(object):
     
     def __init__(self, obj):
         self.obj = obj
@@ -219,18 +275,7 @@ class DDLGeneratorLink(object):
         pass
 
         
-class DDLGeneratorSat(object):
-    
-    def __init__(self, obj):
-        self.obj = obj
-        # test various condition that must be satified for DDL geneeration
-        # maybe model-rule check enough and nothing to add here?...
-        
-    def ddl():
-        pass
-
-        
-class DDLGeneratorSatLink(object):
+class DDLSatLink(object):
     
     def __init__(self, obj):
         self.obj = obj
@@ -247,7 +292,8 @@ class DMLGenerator(object):
         
     def get_source(self):
         if self.obj.src is None:
-            raise SourceMappingError(self.obj, "'src' attribute required to generate DML".format())
+            pass
+            # raise SourceMappingError(self.obj, "'src' attribute required to generate DML".format())
         return self.obj.src
         
     def validate_sourcing(self):
@@ -264,9 +310,11 @@ class DMLGeneratorHub(DMLGenerator):
         #Hub validate_model() has enforced the presence of nat_keys
         for v in self.obj.nat_keys.values():
             if v.get('src') is None:
-                raise SourceMappingError(self.obj, "'src' attribute required for every 'nat_keys'")
+                pass
+                # raise SourceMappingError(self.obj, "'src' attribute required for every 'nat_keys'")
         if self.obj.sur_key and self.obj.sur_key.get('src') is None:
-            raise SourceMappingError(self.obj, "'sur_key' also required 'src' attribute for mapping (ex. a sequence: seq.nextval())")
+            pass
+            # raise SourceMappingError(self.obj, "'sur_key' also required 'src' attribute for mapping (ex. a sequence: seq.nextval())")
         # etc...
 
         
@@ -285,7 +333,7 @@ class DMLGeneratorLink(DMLGenerator):
                 try:
                     hub_gen.validate_sourcing() 
                 except SourceMappingError as e:
-                    raise SourceMappingError(self.obj, "Link sourcing inherited from Hub requires valid Hub sourcing") from e
+                    raise SourceMappingError(self.obj, "Link sourcing inherited from Hub requires valid Hub sourcing")
                 hub_src.add(h.src)
             if len(hub_src) > 1:
                 raise SourceMappingError(self.obj, "Link sourcing inherited from Hub, requires same source for all Hub")
