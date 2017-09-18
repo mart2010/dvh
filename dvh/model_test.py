@@ -1,26 +1,33 @@
 # coding: utf-8
 import pytest
 from dvh.model import *
+import ruamel.yaml
 import sys
 
 @pytest.fixture
 def simple_model():
     pass
 
+## ------------------------------------------------------------------------------------------- ##
+##          Test yaml Loading of model eand model rules checks
+## ------------------------------------------------------------------------------------------- ##
 
 def test_default_att():
     y_t = """
         !Hub
             nat_keys:
-                h1_id: {type: number, size: 9}
-                h2_id: {type: date} 
+                - {name: h1_id, format: number(9)}
+                - {name: h2_id, format: date} 
         """
     h = yaml.load(y_t)
     assert h.sur_key is None
-    assert h.nat_keys['h1_id']['type'] == 'number'
-    assert h.nat_keys['h1_id']['size'] == 9
+    assert h.nat_keys[0]['name'] == 'h1_id'
+    assert h.nat_keys[0]['format'] == 'number(9)'
+    assert h.nat_keys[1].get('name') == 'h2_id'
+    assert h.nat_keys[1].get('size') is None
     #print(repr(h))
-
+   
+    
 def callfct(function_call, error_expected=None):
     if error_expected:
         with pytest.raises(Exception) as e:
@@ -29,32 +36,34 @@ def callfct(function_call, error_expected=None):
     else:
         function_call()
  
-def tst_hub():
-    no_nat_keys = """
+def test_hub():
+    inval_nat_keys = """
         !Hub
-            natt_keyyys:
-                n_id: {type: number, size: 9}   
+            nat_keys:
+                invalid_def: {format: number(9)}
         """
-    s_o = yaml.load(no_nat_keys)
+    s_o = yaml.load(inval_nat_keys)
     callfct(s_o.validate_model, ModelRuleError)
     
     two_nat_keys_no_sur = """
         !Hub
             nat_keys:
-                h_id1: {type: number, size: 9}
-                h_id2: {type: number, size: 9}
+                - {name: h_id1, format: number(9)}
+                - {name: h_id2, format: number(9)}
         """
     s_o = yaml.load(two_nat_keys_no_sur)
+    assert isinstance(s_o.nat_keys, list) 
     callfct(s_o.validate_model, ModelRuleError)
 
     no_error = """
         !Hub
             nat_keys:
-                h_id1: {type: number, size: 9}
-                h_id2: {type: number, size: 9}
-            sur_key: {name: h_key1, type: number, size: 9}
+                - {name: h_id1, format: number(9)}
+                - {name: h_id2, format: number(9)}
+            sur_key: {name: h_key1, format: number(9)}
         """
     s_o = yaml.load(no_error)
+    assert isinstance(s_o.sur_key, dict)
     callfct(s_o.validate_model)
 
     
@@ -62,19 +71,20 @@ dv_2hubs_txt = \
 """!DVModel
        tables: 
             h1: &h1 !Hub
-                nat_keys: 
-                    h1_id: {type: number}
+                nat_keys:
+                    - {name: h1_id, format: number}
             h2: !Hub &h2
                 nat_keys: 
-                    h2_id: {type: number}                 
+                    - {name: h2_id, format: number}                 
 """
  
-def tst_link(): 
+def test_link(): 
     l_one_hub = dv_2hubs_txt + """
             l1: !Link
                 hubs: [*h1]
     """
     s_o = yaml.load(l_one_hub)
+    assert s_o.tables['l1'].hubs[0] is s_o.tables['h1'] 
     callfct(s_o.validate_model, ModelRuleError)
 
     link_with_default_fkey = dv_2hubs_txt + """
@@ -83,7 +93,11 @@ def tst_link():
                 sur_key: {name: my_sur}
     """
     s_o = yaml.load(link_with_default_fkey)
-    callfct(s_o.validate_model, ModelRuleError)
+    assert s_o.tables['l1'].hubs[0] is s_o.tables['h1'] 
+    assert s_o.tables['l1'].hubs[1] is s_o.tables['h2'] 
+    assert isinstance(s_o.tables['l1'].sur_key, dict)
+    
+    callfct(s_o.validate_model)
     
     link_with_fkey_mismatch = dv_2hubs_txt + """
             l1: !Link
@@ -92,6 +106,7 @@ def tst_link():
                 sur_key: {name: my_sur}
     """
     s_o = yaml.load(link_with_fkey_mismatch)
+    assert isinstance(s_o.tables['l1'].for_keys, list)
     callfct(s_o.validate_model, ModelRuleError)
     
     link_with_fkey_ok = dv_2hubs_txt + """
@@ -104,38 +119,138 @@ def tst_link():
     callfct(s_o.validate_model)
  
 def test_sat():
-    s_no_atts  = dv_2hubs_txt + """
+    s_no_hub  = dv_2hubs_txt + """
             s1: !Sat 
-                hub: *h1 
-    """
-    s_o = yaml.load(s_no_atts)
-    callfct(s_o.validate_model, ModelRuleError)
-
-    s_no_hub = dv_2hubs_txt + """
-            s1: !Sat
-                atts:
-                    att1: {type: number}
+                hubbb: *h1 
     """
     s_o = yaml.load(s_no_hub)
+    assert isinstance(s_o.tables['s1'], Sat)
+    assert isinstance(s_o.tables['s1'].hubbb, Hub)
+    callfct(s_o.validate_model, ModelRuleError)
+
+    no_error = dv_2hubs_txt + """
+            s1: !Sat 
+                hub: *h1 
+                atts:
+                    - {name: att1, format: number}
+                    - {name: att2, format: varchar2(10)}
+                lfc_dts: {name: valid_from, format: date}
+    """
+    s_o = yaml.load(no_error)
+    assert s_o.tables['s1'].atts[0]['name'] == 'att1' 
     callfct(s_o.validate_model)
 
-#    no_error = dv_2hubs_txt + """
-#            s1: !Sat 
-#                hub: *h1 
-#                atts:
-#                    att1: {type: number}
-#                lfc_dts: {name: valid_from, type: date}
-#    """
-#    expect_err(no_error, nb_expected=0)
+    
+## ------------------------------------------------------------------------------------------- ##
+##          Test DDL generation
+## ------------------------------------------------------------------------------------------- ##
+
+ddl_template = """
+    
+hub:          CREATE TABLE {name}_h (
+              [{sur_key.name}, {name}_key] [{sur_key.format}, NUMBER(9)],
+              {nat_keys.name} {nat_keys.format} NOT NULL,
+              {extras.name} {extras.format},
+              load_dts DATE NOT NULL,
+              last_seen_date DATE,
+              process_id NUMBER(9),
+              rec_src VARCHAR2(200),
+              CONSTRAINT {name}_pk PRIMARY_KEY ([{sur_key.name}, {name}_key]),
+              UNIQUE ({nat_keys.name}));
+
+hub_no_sur:   CREATE TABLE {name}_h (
+              {nat_keys.name} {nat_keys.format},
+              {extras.name} {extras.format},
+              load_dts DATE NOT NULL,
+              last_seen_date DATE,
+              process_id NUMBER(9),
+              rec_src VARCHAR2(200),
+              CONSTRAINT {name}_pk PRIMARY_KEY ({nat_keys.name}));
+
+link:         CREATE TABLE {name}_l (
+              [{sur_key.name}, {name}_key] [{sur_key.format}, NUMBER(9)],
+              [{for_keys.name}, {hubs.primary_key}] NOT NULL,  -- format FIXED to Hub's primary_key
+              {extras.name} {extras.format},
+              load_dts NOT NULL,
+              last_seen_date DATE,
+              process_id NUMBER(9),
+              rec_src VARCHAR2(200),
+              CONSTRAINT {name}_pk PRIMARY_KEY ([{sur_key.name}, {name}_key]),
+              UNIQUE ({for_keys.name}),
+              CONSTRAINT {name}_{hubs.name}_fk FOREIGN KEY ({for_keys}) REFERENCE {hubs.name}_h 
+              );
+    
+sat:          CREATE TABLE {name}_s (
+              [{for_key.name}, {hub.primary_key}],                  -- format FIXED to Hub's primary_key
+              [{lfc_dts.name}, effective_date] DATE NOT NULL,       --format FIXED to be aligned with expiration
+              expiration_date DATE NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
+              {atts.name} {atts.format},
+              process_id NUMBER(9),
+              update_process_id NUMBER(9),
+              rec_src VARCHAR2(200),
+              CONSTRAINT {name}_pk PRIMARY_KEY ([{for_key.name}, {hub.primary_key}], [{lfc_dts.name}, effective_date]),
+              CONSTRAINT {name}_{hub.name}_fk FOREIGN KEY ([{for_key.name}, {hub.primary_key}]) REFERENCE {hub.name}_h           
+              );
+    
+satlink:      CREATE TABLE {name}_sl (
+              [{for_key.name}, {link.sur_key}],                     -- format FIXED to Link's primary_key
+              [{lfc_dts.name}, effective_date] DATE NOT NULL,       -- format FIXED to be aligned with expiration
+              expiration_date NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
+              {atts.name}  {atts.format},
+              process_id NUMBER(9),
+              update_process_id NUMBER(9),
+              rec_src VARCHAR2(200),
+              CONSTRAINT {name}_pk PRIMARY_KEY ([{for_key.name}, {link.sur_key}], [{lfc_dts.name}, effective_date]),
+              CONSTRAINT {name}_{link.name}_fk FOREIGN KEY ([{for_key.name}, {link.sur_key}]) REFERENCE {link.name}_l
+              );
+    
+Sat_multi_version:
+    sat:      CREATE TABLE {name}_s (
+              {hub.nat_keys},
+              {other_key}, 
+              effective_date DATE NOT NULL,
+              expiration_date DATE NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
+              {atts},
+              process_id NUMBER(9),
+              update_process_id NUMBER(9),
+              rec_src VARCHAR2(200),
+              CONSTRAINT {name}_pk PRIMARY_KEY ({hub.nat_keys}, {other_key}, effective_date),
+              CONSTRAINT {name}_{hub.name}_fk FOREIGN KEY ({hub.nat_keys}) REFERENCE {hub.name}_h
+              );
+    
+    satlink:  TODO...CREATE TABLE {name}_sl (
+              {link.sur_key} NUMBER(9),
+              effective_date DATE NOT NULL,
+              expiration_date DATE NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
+              {atts},
+              process_id NUMBER(9),
+              update_process_id NUMBER(9),
+              rec_src VARCHAR2(200),
+              CONSTRAINT {name}_pk PRIMARY_KEY ({link.sur_key}, effective_date),
+              CONSTRAINT {name}_{link.name}_fk FOREIGN KEY ({hub.sur_key}) REFERENCE {hub.name}_h
+              );  
+
+"""
+template = yaml.load(ddl_template)
+
+print(str(template))
 
 
+
+#propose strag:
+#- replace {name} as easy
+#- find the couple {} followed by space followed by any char  --> regex = r"({\w+})\s+(\S+)"
+#- resolve the att var if we find format attr then replace also the format (second element found (except if 'NOT'))  
+#-     
+    
+    
 def tst_hub_mapping():
     hub_partial_mapping = """
         !Hub
             nat_keys:
-                h_id1: {type: number, size: 9, src: s_id1}
-                h_id2: {type: number, size: 9}
-            sur_key: {name: h_key1, type: number, size: 9}
+                h_id1: {format: number, size: 9, src: s_id1}
+                h_id2: {format: number, size: 9}
+            sur_key: {name: h_key1, format: number, size: 9}
             src: src_hub
         """
     expect_err(hub_partial_mapping, nb_expected=2, validate_mapping_only=True)
@@ -143,14 +258,18 @@ def tst_hub_mapping():
     hub_ok_mapping = """
         !Hub
             nat_keys:
-                h_id1: {type: number, size: 9, src: s_id1}
-                h_id2: {type: number, size: 9, src: s_id2}
-            sur_key: {name: h_key1, type: number, size: 9, src: seq}
+                h_id1: {format: number, size: 9, src: s_id1}
+                h_id2: {format: number, size: 9, src: s_id2}
+            sur_key: {name: h_key1, format: number, size: 9, src: seq}
             src: src_hub
         """
     expect_err(hub_ok_mapping, nb_expected=0, validate_mapping_only=True)
 
 
+    
+    
+    
+    
     
 def tst_link_mapping():
     
@@ -161,7 +280,7 @@ def tst_link_mapping():
     """
     expect_err(l_hub_no_mapping, 0, validate_mapping_only=True)
     
-    l_hub_withfkeys_no_mapping = dv_2hubs_txt + """
+    l_hub_withfkeys_mapping = dv_2hubs_txt + """
             l1: !Link
                 hubs: [*h1, *h2]
                 for_keys: [{name: fk1}, {name: fk2}]
@@ -170,59 +289,4 @@ def tst_link_mapping():
     """
     
 
-ddl_template = """
-
-Default:
-    hub:      CREATE TABLE {name}_h (
-              {sur_key} NUMBER(9),
-              {nat_keys} NOT NULL,
-              load_dts DATE NOT NULL,
-              last_seen_date DATE,
-              process_id NUMBER(9),
-              rec_src VARCHAR2(200),
-              CONSTRAINT {name}_pk PRIMARY_KEY ({sur_key}),
-              UNIQUE ({nat_keys})
-              );
-    
-    link:     CREATE TABLE {name}_l (
-              {sur_key} NUMBER(9),
-              {for_keys} NUMBER(9) NOT NULL,
-              load_dts NOT NULL,
-              last_seen_date DATE,
-              process_id NUMBER(9),
-              rec_src VARCHAR2(200),
-              CONSTRAINT {name}_pk PRIMARY_KEY ({sur_key}),
-              UNIQUE {for_keys},
-              CONSTRAINT {name}_{hubs.name}_fk FOREIGN KEY ({for_keys}) REFERENCE {hubs.name}_h 
-              );
-    
-    sat:      CREATE TABLE {name}_s (
-              {hub.sur_key} NUMBER(9),
-              effective_date DATE NOT NULL,
-              expiration_date DATE NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
-              {atts},
-              process_id NUMBER(9),
-              update_process_id NUMBER(9),
-              rec_src VARCHAR2(200),
-              CONSTRAINT {name}_pk PRIMARY_KEY ({hub.sur_key}, effective_date),
-              CONSTRAINT {name}_{hub.name}_fk FOREIGN KEY ({hub.sur_key}) REFERENCE {hub.name}_h           
-              );
-    
-    satlink:  CREATE TABLE {name}_sl (
-              {link.sur_key} NUMBER(9),
-              effective_date DATE NOT NULL,
-              expiration_date DATE NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
-              {atts},
-              process_id NUMBER(9),
-              update_process_id NUMBER(9),
-              rec_src VARCHAR2(200),
-              CONSTRAINT {name}_pk PRIMARY_KEY ({link.sur_key}, effective_date),
-              CONSTRAINT {name}_{link.name}_fk FOREIGN KEY ({hub.sur_key}) REFERENCE {hub.name}_h
-              );
-    
-Sat_with_deletion:
-                
-
-
-"""
 

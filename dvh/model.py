@@ -1,6 +1,7 @@
 # coding: utf-8
 import ruamel.yaml
 import re
+import abc
 
 # there will be a few type of errors/warnings:  
     # - Yaml-related (syntaxic or technical issues causing yaml.load  model to fail ) --> catch e and raise "MyBusiness" from e  done from the model reader..
@@ -29,14 +30,44 @@ class SourceMappingError(BaseError):
     def __str__(self):
         return "Mapping Definition error for {0} '{1}' --> \t{2}".format(self.obj.__class__.__name__, self.obj.name, self.msg)
 
+        
+class DVModel(object):
 
+    def init_tables(self):
+        for k, v in self.tables.items():
+            v.define_name(k)    
+    
+    def validate_model(self):
+        error = False
+        for o in self.tables.values():
+            try:
+                o.validate_model()
+            except (ModelRuleError, DefinitionError) as err:
+                print(err)
+                error = True
+        if error:
+            raise ModelRuleError("Found YAML definition error")
+                                                
+    def tables_in_creation_order(self):
+        for k, _ in sorted(self.tables.items(), key=lambda kv: kv[1].creation_order + kv[0]):
+            # print("ddl order key:" + k)
+            yield k
+
+    def generate_ddl(self, with_drop=False):
+        if with_drop:
+            for n in reversed(self.tables_in_creation_order()):
+                print("I will drop: " + n)
+        for n in self.names_ddl_order():
+            print("I will create DDL for: " + n)
+
+        
 class ModelBase(object):
 
     def define_name(self, name):
         self.name = name
     
     def validate_model(self):
-        raise NotImplementedError
+        raise NotImplementedError        
                   
     # yaml.load() is not using __init__, so default attribute are generated dynamically
     def __getattr__(self, name):
@@ -55,117 +86,61 @@ class ModelBase(object):
     def __str__(self):
         return self.__repr__()
 
-
-class DVModel(ModelBase):
-
-    def init_tables(self):
-        for k, v in self.tables.items():
-            v.define_name(k)    
-    
-    def validate_model(self):
-        error = False
-        for o in self.tables.values():
-            try:
-                o.validate_model()
-            except ModelRuleError as err:
-                print(err)
-                error = True
-        if error:
-            raise ModelRuleError("All model-rule error before")
-                                                
-    def tables_in_creation_order(self):
-        for k, _ in sorted(self.tables.items(), key=lambda kv: kv[1].creation_order + kv[0]):
-            # print("ddl order key:" + k)
-            yield k
-
-    def generate_ddl(self, with_drop=False):
-        if with_drop:
-            for n in reversed(self.tables_in_creation_order()):
-                print("I will drop: " + n)
-        for n in self.names_ddl_order():
-            print("I will create DDL for: " + n)
-
         
 class Hub(ModelBase):
     creation_order = '1'
-    # une idée afin de pouvoir mettre comme test (ds le Parent) que tous les attrs soIEnt VALIDES
-    ATTS_SUPPORTED= dict(nat_key="Key(s) used for identifying enitiy Hub in source, can replace 'sur_key' when unique", \
-                         sur_key= "Auto generated key acting as Primary key (sequence or auto-increment)", \
-                         src="Source to ....")
-                
+
+    @property
     def primary_key(self):
+    """Rules to determine Primary key (@property allows referencing like: hub.primary_key"""
         if self.sur_key:
             return self.sur_key['name']
         else:
             return list(self.nat_keys.keys())[0]
 
-    def unique_keys(self):
-        if self.sur_key:
-            return list(self.nat_keys.keys())
-        else:
-            return None  
-
     def validate_model(self):
-        if self.nat_keys is None or len(self.nat_keys) == 0:
-            raise ModelRuleError(self, "Hub must have at least one 'nat_keys'")
+        if not isinstance(self.nat_keys, list):
+            raise ModelRuleError(self, "Hub must have a 'nat_keys' list of at least one natural key")
         if self.sur_key is None and len(self.nat_keys) > 1:
-            raise ModelRuleError(self, "Hub without 'sur_key' can only have one 'nat_keys' which becomes Primary key")
+            raise ModelRuleError(self, "Hub without 'sur_key' can only have one 'nat_keys' item (its Primary key)")
 
 
 class Link(ModelBase):
     creation_order = '2'
-
-    def surrogate_key(self):
-        if self.sur_key:
-            return self.sur_key['name']
-        else:
-        # default (plus tard, se baser sur un objet "top-default" (mis dans le yaml DVModel) si défini, sinon retour val suivante:)
-            return self.name + "_key"
-    
-    def foreign_keys(self):
-        f_ks = []
-        if self.for_keys:
-            for k_d in self.for_keys:
-                f_ks.append(k_d['name'])
-        else:
-            for h in self.hubs:
-                # plus tard se baser sur un top-défaut si défini (qui par défaut pourrait mettre cette valeur)
-                f_ks.append(h.primary_key())
-        return f_ks
             
     def validate_model(self):
-        if self.hubs is None or len(self.hubs) < 2:
-            raise ModelRuleError(self, "Link must refer to more than one Hub")
+        if not isinstance(self.hubs, list) or len(self.hubs) < 2:
+            raise ModelRuleError(self, "Link must have a 'hubs' list of at least two Hubs")
         else:
             for h in self.hubs:
                 if not(isinstance(h, Hub)):
-                    raise ModelRuleError(self, "Link must refer to Hub type only")
+                    raise ModelRuleError(self, "Link can only refer to Hub type")
             if self.for_keys and len(self.for_keys) != len(self.hubs):
                 raise ModelRuleError(self, "Link's 'for_keys' mismatch the number of 'hubs'")
                                                     
 
 class Sat(ModelBase):
     creation_order = '3'
-
+    
     def validate_model(self):
         if self.hub is None:
-            raise ModelRuleError(self, "Satellite must refer to one 'hub'")
-        if self.atts is None or len(self.atts) < 1:
-            raise ModelRuleError(self, "Satellite must have at least one attribute listed under 'atts'")
-        if self.lfc_dts is None:
-            raise ModelRuleError(self, "Satellite must have one 'lfc_dts' attribute for lifecycle date/timestamp management")
+            raise ModelRuleError(self, "Satellite must refer to a single 'hub'")
+#        if self.atts is None or len(self.atts) < 1:
+#            raise ModelRuleError(self, "Satellite must have at least one attribute listed under 'atts'")
+#        if self.lfc_dts is None:
+#            raise ModelRuleError(self, "Satellite must have one 'lfc_dts' attribute for lifecycle date/timestamp management")
 
         
 class SatLink(ModelBase):
     creation_order = '4'
-
+    
     def validate_model(self):
         if self.link is None:
-            raise ModelRuleError(self, "Sat-Link must refer to one 'link'")
-        if self.atts is None or len(self.atts) < 1:
-            raise ModelRuleError(self, "Sat-Link must have at least one attribute listed under 'atts'")
-        if self.lfc_dts is None:
-            raise ModelRuleError(self, "Sat-Link must have one 'lfc_dts' attribute for lifecycle date/timestamp management")
+            raise ModelRuleError(self, "Sat-Link must refer to a single 'link'")
+#        if self.atts is None or len(self.atts) < 1:
+#            raise ModelRuleError(self, "Sat-Link must have at least one attribute listed under 'atts'")
+#        if self.lfc_dts is None:
+#            raise ModelRuleError(self, "Sat-Link must have one 'lfc_dts' attribute for lifecycle date/timestamp management")
 
 yaml = ruamel.yaml.YAML()
 yaml.register_class(DVModel)
@@ -204,11 +179,12 @@ class DDLGenerator(object):
     def validate_ddl(self):
         raise NotImplementedError
         
-    def ddl():
+    def ddl(self):     
+        
         raise NotImplementedError
 
         
-class DDLBase(object):
+class DDLObject(object):
     
     # create static constructor based on type of object...
     # todo
@@ -223,7 +199,7 @@ class DDLBase(object):
         
     def resolve_keyword(self, keyword):
         def try_resolve(obj, attr):
-            # don't need to try:/except:  dv object do not raise AttributeError on missing attribute 
+            # don't need to try/except, objects do not raise AttributeError on missing attribute 
             value = getattr(obj, attr)
             if value is None:
                 raise DefinitionError(self.dv_obj, "DDL attribute '{0}' in template {1} not resolvable".format(attr, self.template))
@@ -244,6 +220,7 @@ class DDLBase(object):
                 value = try_resolve(parent, kw[1])    
         return value
   
+
         
         
         
