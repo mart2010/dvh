@@ -148,14 +148,14 @@ def test_sat():
 ddl_template = """
     
 hub:          CREATE TABLE {name}_h (
-              [{sur_key.name}, {name}_key] [{sur_key.format}, NUMBER(9)],
+              ({sur_key.name}, {name}_key) ({sur_key.format}, NUMBER(9)),
               {nat_keys.name} {nat_keys.format} NOT NULL,
               {extras.name} {extras.format},
               load_dts DATE NOT NULL,
               last_seen_date DATE,
               process_id NUMBER(9),
               rec_src VARCHAR2(200),
-              CONSTRAINT {name}_pk PRIMARY_KEY ([{sur_key.name}, {name}_key]),
+              CONSTRAINT {name}_pk PRIMARY_KEY (({sur_key.name}, {name}_key),
               UNIQUE ({nat_keys.name}));
 
 hub_no_sur:   CREATE TABLE {name}_h (
@@ -168,40 +168,40 @@ hub_no_sur:   CREATE TABLE {name}_h (
               CONSTRAINT {name}_pk PRIMARY_KEY ({nat_keys.name}));
 
 link:         CREATE TABLE {name}_l (
-              [{sur_key.name}, {name}_key] [{sur_key.format}, NUMBER(9)],
-              [{for_keys.name}, {hubs.primary_key}] NOT NULL,  -- format FIXED to Hub's primary_key
+              ({sur_key.name}, {name}_key) ([{sur_key.format}, NUMBER(9)),
+              ({for_keys.name}, {hubs.primary_key}) NOT NULL,  -- format FIXED to Hub's primary_key
               {extras.name} {extras.format},
               load_dts NOT NULL,
               last_seen_date DATE,
               process_id NUMBER(9),
               rec_src VARCHAR2(200),
-              CONSTRAINT {name}_pk PRIMARY_KEY ([{sur_key.name}, {name}_key]),
+              CONSTRAINT {name}_pk PRIMARY_KEY (({sur_key.name}, {name}_key)),
               UNIQUE ({for_keys.name}),
               CONSTRAINT {name}_{hubs.name}_fk FOREIGN KEY ({for_keys}) REFERENCE {hubs.name}_h 
               );
     
 sat:          CREATE TABLE {name}_s (
-              [{for_key.name}, {hub.primary_key}],                  -- format FIXED to Hub's primary_key
-              [{lfc_dts.name}, effective_date] DATE NOT NULL,       --format FIXED to be aligned with expiration
+              ({for_key.name}, {hub.primary_key}),                  -- format FIXED to Hub's primary_key
+              ({lfc_dts.name}, effective_date) DATE NOT NULL,       --format FIXED to be aligned with expiration
               expiration_date DATE NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
               {atts.name} {atts.format},
               process_id NUMBER(9),
               update_process_id NUMBER(9),
               rec_src VARCHAR2(200),
-              CONSTRAINT {name}_pk PRIMARY_KEY ([{for_key.name}, {hub.primary_key}], [{lfc_dts.name}, effective_date]),
-              CONSTRAINT {name}_{hub.name}_fk FOREIGN KEY ([{for_key.name}, {hub.primary_key}]) REFERENCE {hub.name}_h           
+              CONSTRAINT {name}_pk PRIMARY_KEY ([{for_key.name}, {hub.primary_key}], ({lfc_dts.name}, effective_date)),
+              CONSTRAINT {name}_{hub.name}_fk FOREIGN KEY (({for_key.name}, {hub.primary_key})) REFERENCE {hub.name}_h           
               );
     
 satlink:      CREATE TABLE {name}_sl (
-              [{for_key.name}, {link.sur_key}],                     -- format FIXED to Link's primary_key
-              [{lfc_dts.name}, effective_date] DATE NOT NULL,       -- format FIXED to be aligned with expiration
+              ({for_key.name}, {link.sur_key}),                     -- format FIXED to Link's primary_key
+              ({lfc_dts.name}, effective_date) DATE NOT NULL,       -- format FIXED to be aligned with expiration
               expiration_date NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
               {atts.name}  {atts.format},
               process_id NUMBER(9),
               update_process_id NUMBER(9),
               rec_src VARCHAR2(200),
-              CONSTRAINT {name}_pk PRIMARY_KEY ([{for_key.name}, {link.sur_key}], [{lfc_dts.name}, effective_date]),
-              CONSTRAINT {name}_{link.name}_fk FOREIGN KEY ([{for_key.name}, {link.sur_key}]) REFERENCE {link.name}_l
+              CONSTRAINT {name}_pk PRIMARY_KEY (({for_key.name}, {link.sur_key}), ({lfc_dts.name}, effective_date),
+              CONSTRAINT {name}_{link.name}_fk FOREIGN KEY (({for_key.name}, {link.sur_key})) REFERENCE {link.name}_l
               );
     
 Sat_multi_version:
@@ -233,9 +233,15 @@ Sat_multi_version:
 """
 template = yaml.load(ddl_template)
 
-print(str(template))
 
-
+def test_resolve_keyword():
+    
+    hub1 = Hub()
+    hub1.name = 'hub1'
+    txt = " {hub.name}_suffix "
+    print(resolve_keyword(hub1, txt))
+    
+    
 
 #propose strag:
 #- replace {name} as easy

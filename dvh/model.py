@@ -92,7 +92,7 @@ class Hub(ModelBase):
 
     @property
     def primary_key(self):
-    """Rules to determine Primary key (@property allows referencing like: hub.primary_key"""
+        """Rules to determine Primary key (property allows referencing like: hub.primary_key"""
         if self.sur_key:
             return self.sur_key['name']
         else:
@@ -183,12 +183,49 @@ class DDLGenerator(object):
         
         raise NotImplementedError
 
+def resolve_keyword(dv_obj, txt_with_keyword, mandatory=False):
+    """Resolve txt '{obj.prop}' and return result as list (with one element --when obj is an object, or more --when obj is list)"""
+    def try_resolve(obj, attr, mandatory):
+        # don't need to try/except, objects do not raise AttributeError on missing attribute 
+        val = getattr(obj, attr)
+        if val is None and mandatory:
+            raise DefinitionError(obj, "attribute '{0}' not resolvable".format(attr))
+        return val   
+    
+    keyword = txt_with_keyword[txt_with_keyword.index('{'):txt_with_keyword.index('}')]
+    suffix = txt_with_keyword[txt_with_keyword.index('}')+1:].strip()
+    kw = keyword.split(".")
+    if  len(kw) > 2:
+        raise DefinitionError(dv_obj, "resolving attribute '{0}' more than 2 level not supported".format(keyword))
+    # one "." 
+    elif len(kw) == 2:
+        parent = try_resolve(dv_obj, kw[0], mandatory)
+        if isinstance(parent, list):
+            value = [try_resolve(child, kw[1], mandatory) for child in parent]
+        elif parent:
+            value = try_resolve(parent, kw[1], mandatory)
+        else:
+            value = None
+    # no '.' 
+    else:
+        value = try_resolve(dv_obj, keyword, mandatory)
+   
+    if value is None:
+        return None    
+    if isinstance(value, list):
+        return [v + suffix for v in value]
+    elif isinstance(value, str):
+        return [value + suffix] 
+    else:
+        raise Exception("Unexpected programming error")
+        
         
 class DDLObject(object):
     
-    # create static constructor based on type of object...
-    # todo
-    
+    # capture one '(' plus any chars, followed by ',' plus any chars, followed by one or more ')'
+    regex_with_default = re.compile(r'(\([^,]+,[^\)]+\)+)')
+    regex_curly = re.compile(r'{([^}]+)}')
+        
     def __init__(self, dv_obj, template):
         self.dv_obj
         self.template = template
@@ -196,72 +233,17 @@ class DDLObject(object):
     def keywords_found(self):
         regex_kw = re.compile("{(\w+_*)}")
         return regex_kw.findall(self.template)
-        
-    def resolve_keyword(self, keyword):
-        def try_resolve(obj, attr):
-            # don't need to try/except, objects do not raise AttributeError on missing attribute 
-            value = getattr(obj, attr)
-            if value is None:
-                raise DefinitionError(self.dv_obj, "DDL attribute '{0}' in template {1} not resolvable".format(attr, self.template))
-            return value                
-        
-        kw = keyword.split(".")
-        if  len(kw) > 2:
-            raise DefinitionError(self.dv_obj, "DDL template attribute '{0}' is not valid".format(keyword))
-        elif len(kw) == 1:
-            value = self.try_resolve(self.dv_obj, keyword)
-        # one "."
-        else:
-            parent = self.try_resolve(self.dv_obj, kw[0])
-            # to do check if containers...
-            if type(parent) is list:
-                value = [self.try_resolve(child, kw[1]) for child in parent]
-            else:
-                value = try_resolve(parent, kw[1])    
-        return value
-  
-
-        
-        
-        
-class DDLHub(DDLBase):
-            
+    
     def ddl(self):
-        pass
-
+        ddl = None
+        # 1st process default value --> (attr, default)
+        for exp in self.regex_with_default.findall(self.template):
+            args = exp.split(',')
+            val =  resolve_keyword(args[0]) 
+            if val is None:
+                default = args[0]
+                # TODO.. to continue
         
-class DDLLink(object):
-    
-    def __init__(self, obj):
-        self.obj = obj
-        # test various condition that must be satified for DDL geneeration
-        # maybe model-rule check enough and nothing to add here?...
-        
-    def ddl():
-        pass
-
-        
-class DDLSat(object):
-    
-    def __init__(self, obj):
-        self.obj = obj
-        # test various condition that must be satified for DDL geneeration
-        # maybe model-rule check enough and nothing to add here?...
-        
-    def ddl():
-        pass
-
-        
-class DDLSatLink(object):
-    
-    def __init__(self, obj):
-        self.obj = obj
-        # test various condition that must be satified for DDL geneeration
-        # maybe model-rule check enough and nothing to add here?...
-        
-    def ddl():
-        pass
-
     
 class DMLGenerator(object):
     def __init__(self, obj):
