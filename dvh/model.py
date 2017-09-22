@@ -11,26 +11,20 @@ import abc
     # 4- Log some warning, when generating code (DDL, DML...) requires falling back to default value  
 
 class BaseError(Exception):
-    pass
-
-
-class ModelRuleError(BaseError):     
     def __init__(self, obj, msg):
         self.obj = obj
         self.msg = msg
+
+    def __str__(self):
+        return "Error for object {0} --> \t{1}".format(self.obj, self.msg)
+
+class ModelRuleError(BaseError): pass
     
-    def __str__(self):
-        return "Model error for {0} '{1}' --> \t{2}".format(self.obj.__class__.__name__, self.obj.name, self.msg)
+class DefinitionError(BaseError): pass
 
-class DefinitionError(BaseError):
-    def __str__(self):
-        return "Definition error for {0} '{1}' --> \t{2}".format(self.obj.__class__.__name__, self.obj.name, self.msg)
-
-class SourceMappingError(BaseError):
-    def __str__(self):
-        return "Mapping Definition error for {0} '{1}' --> \t{2}".format(self.obj.__class__.__name__, self.obj.name, self.msg)
-
+class SourceMappingError(BaseError): pass
         
+
 class DVModel(object):
 
     def init_tables(self):
@@ -183,36 +177,39 @@ class DDLGenerator(object):
         
         raise NotImplementedError
 
-def resolve_keyword(dv_obj, txt_with_keyword, mandatory=False):
-    """Resolve txt '{obj.prop}' and return result as list (with one element --when obj is an object, or more --when obj is list)"""
+def resolve_keyword(dv_obj, txt_curly, mandatory=False):
+    """Resolve txt '{obj.prop}_suffix' and return a list of string appended with any suffix found from txt_curly"""
     def try_resolve(obj, attr, mandatory):
         # don't need to try/except, objects do not raise AttributeError on missing attribute 
         val = getattr(obj, attr)
         if val is None and mandatory:
-            raise DefinitionError(obj, "attribute '{0}' not resolvable".format(attr))
+            raise DefinitionError(obj, "Mandatory attribute '{}' not resolvable".format(attr))
         return val   
     
-    keyword = txt_with_keyword[txt_with_keyword.index('{'):txt_with_keyword.index('}')]
-    suffix = txt_with_keyword[txt_with_keyword.index('}')+1:].strip()
+    close_idx = txt_curly.index('}')
+    keyword = txt_curly[txt_curly.index('{')+1:close_idx].strip()
+    suffix = ""
+    if close_idx < len(txt_curly)-1 and  txt_curly[close_idx+1] != " ":
+        suffix = txt_curly[txt_curly.index('}')+1:].strip()
     kw = keyword.split(".")
     if  len(kw) > 2:
-        raise DefinitionError(dv_obj, "resolving attribute '{0}' more than 2 level not supported".format(keyword))
+        raise DefinitionError(dv_obj, "resolving attribute '{0}' with more than 2 levels not supported".format(keyword))
     # one "." 
     elif len(kw) == 2:
         parent = try_resolve(dv_obj, kw[0], mandatory)
-        if isinstance(parent, list):
+        if parent is None:
+             return None
+        elif isinstance(parent, list):
             value = [try_resolve(child, kw[1], mandatory) for child in parent]
-        elif parent:
-            value = try_resolve(parent, kw[1], mandatory)
         else:
-            value = None
+            value = try_resolve(parent, kw[1], mandatory)
     # no '.' 
     else:
         value = try_resolve(dv_obj, keyword, mandatory)
    
     if value is None:
         return None    
-    if isinstance(value, list):
+    elif isinstance(value, list):
         return [v + suffix for v in value]
     elif isinstance(value, str):
         return [value + suffix] 

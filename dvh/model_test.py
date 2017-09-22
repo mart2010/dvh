@@ -32,6 +32,7 @@ def callfct(function_call, error_expected=None):
     if error_expected:
         with pytest.raises(Exception) as e:
             function_call()
+            #TODO: not sure next line is executed at all?????
             assert e.value.__class__ == error_expected
     else:
         function_call()
@@ -238,10 +239,24 @@ def test_resolve_keyword():
     
     hub1 = Hub()
     hub1.name = 'hub1'
-    txt = " {hub.name}_suffix "
-    print(resolve_keyword(hub1, txt))
+    assert resolve_keyword(hub1, "(({name}")[0] == hub1.name 
+    assert resolve_keyword(hub1, "*({name} no_suffix ")[0] == hub1.name
+    assert resolve_keyword(hub1, "{name}_suffix ", mandatory=True)[0] == hub1.name + "_suffix"                          
+    assert resolve_keyword(hub1, " {dummy}") is None
+    with pytest.raises(Exception) as e:
+        resolve_keyword(hub1, " {dummy}", mandatory=True)
+    assert e.value.__class__ == DefinitionError
+    with pytest.raises(Exception) as e:
+        resolve_keyword(hub1, " {dummy}", mandatory=True)
+    assert e.value.__class__ == DefinitionError
+
     
-    
+    hub2 = Hub()
+    hub2.name = 'hub2'
+    link = Link()
+    link.hubs = [hub1, hub2]
+    assert resolve_keyword(link, "{hubs.name}") == ['hub1','hub2']
+    assert resolve_keyword(link, "{hubs.name}_s") == ['hub1_s','hub2_s']                           
 
 #propose strag:
 #- replace {name} as easy
