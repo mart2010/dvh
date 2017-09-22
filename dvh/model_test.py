@@ -147,77 +147,78 @@ def test_sat():
 ## ------------------------------------------------------------------------------------------- ##
 
 ddl_template = """
-    
-hub:          CREATE TABLE {name}_h (
-              ({sur_key.name}, {name}_key) ({sur_key.format}, NUMBER(9)),
-              {nat_keys.name} {nat_keys.format} NOT NULL,
-              {extras.name} {extras.format},
+default_values:
+    hub:  {sur_key.name: "[name]_key", sur_key.format: NUMBER(9)}
+    link: {sur_key.name: "[name]_key", for_keys.name: "[hubs.primary_key]" }
+    sat:  {for_key.name: "[hub.primary_key]", lfc_dts: effective_date }
+    satlink:  {for_key.name: "[link.sur_key]", lfc_dts: effective_date }
+           
+hub:          CREATE TABLE [name]_h (
+              [sur_key.name] [sur_key.format],
+              [nat_keys.name] [nat_keys.format] NOT NULL,
+              [extras.name] [extras.format],
               load_dts DATE NOT NULL,
               last_seen_date DATE,
               process_id NUMBER(9),
               rec_src VARCHAR2(200),
-              CONSTRAINT {name}_pk PRIMARY_KEY (({sur_key.name}, {name}_key),
-              UNIQUE ({nat_keys.name}));
+              CONSTRAINT [name]_pk PRIMARY_KEY ([sur_key.name]),
+              UNIQUE ([nat_keys.name]));
 
-hub_no_sur:   CREATE TABLE {name}_h (
-              {nat_keys.name} {nat_keys.format},
-              {extras.name} {extras.format},
+hub_no_sur:   CREATE TABLE [name]_h (
+              [nat_keys.name] [nat_keys.format],
+              [extras.name] [extras.format],
               load_dts DATE NOT NULL,
               last_seen_date DATE,
               process_id NUMBER(9),
               rec_src VARCHAR2(200),
-              CONSTRAINT {name}_pk PRIMARY_KEY ({nat_keys.name}));
+              CONSTRAINT [name]_pk PRIMARY_KEY ([nat_keys.name]));
 
-link:         CREATE TABLE {name}_l (
-              ({sur_key.name}, {name}_key) ([{sur_key.format}, NUMBER(9)),
-              ({for_keys.name}, {hubs.primary_key}) NOT NULL,  -- format FIXED to Hub's primary_key
-              {extras.name} {extras.format},
+link:         CREATE TABLE [name]_l (
+              [sur_key.name] [sur_key.format],
+              [for_keys.name] NOT NULL,  -- format FIXED to Hub's primary_key
+              [extras.name] [extras.format],
               load_dts NOT NULL,
               last_seen_date DATE,
               process_id NUMBER(9),
               rec_src VARCHAR2(200),
-              CONSTRAINT {name}_pk PRIMARY_KEY (({sur_key.name}, {name}_key)),
-              UNIQUE ({for_keys.name}),
-              CONSTRAINT {name}_{hubs.name}_fk FOREIGN KEY ({for_keys}) REFERENCE {hubs.name}_h 
-              );
+              CONSTRAINT [name]_pk PRIMARY_KEY ([sur_key.name]),
+              UNIQUE ([for_keys.name]),
+              CONSTRAINT [name]_[hubs.name]_fk FOREIGN KEY ([for_keys.name]) REFERENCE [hubs.name]_h );
     
-sat:          CREATE TABLE {name}_s (
-              ({for_key.name}, {hub.primary_key}),                  -- format FIXED to Hub's primary_key
-              ({lfc_dts.name}, effective_date) DATE NOT NULL,       --format FIXED to be aligned with expiration
+sat:          CREATE TABLE [name]_s (
+              [for_key.name],                  -- format FIXED to Hub's primary_key
+              [lfc_dts.name] DATE NOT NULL,    --format FIXED to be aligned with expiration
               expiration_date DATE NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
-              {atts.name} {atts.format},
+              [atts.name] [atts.format],
               process_id NUMBER(9),
               update_process_id NUMBER(9),
               rec_src VARCHAR2(200),
-              CONSTRAINT {name}_pk PRIMARY_KEY ([{for_key.name}, {hub.primary_key}], ({lfc_dts.name}, effective_date)),
-              CONSTRAINT {name}_{hub.name}_fk FOREIGN KEY (({for_key.name}, {hub.primary_key})) REFERENCE {hub.name}_h           
-              );
+              CONSTRAINT [name]_pk PRIMARY_KEY ([for_key.name], [lfc_dts.name]),
+              CONSTRAINT [name]_[hub.name]_fk FOREIGN KEY ([for_key.name]) REFERENCE [hub.name]_h );
     
-satlink:      CREATE TABLE {name}_sl (
-              ({for_key.name}, {link.sur_key}),                     -- format FIXED to Link's primary_key
-              ({lfc_dts.name}, effective_date) DATE NOT NULL,       -- format FIXED to be aligned with expiration
+satlink:      CREATE TABLE [name]_sl (
+              [for_key.name],                     -- format FIXED to Link's primary_key
+              [lfc_dts.name] DATE NOT NULL,       -- format FIXED to be aligned with expiration
               expiration_date NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
-              {atts.name}  {atts.format},
+              [atts.name]  [atts.format],
               process_id NUMBER(9),
               update_process_id NUMBER(9),
               rec_src VARCHAR2(200),
-              CONSTRAINT {name}_pk PRIMARY_KEY (({for_key.name}, {link.sur_key}), ({lfc_dts.name}, effective_date),
-              CONSTRAINT {name}_{link.name}_fk FOREIGN KEY (({for_key.name}, {link.sur_key})) REFERENCE {link.name}_l
-              );
+              CONSTRAINT [name]_pk PRIMARY_KEY ([for_key.name], [lfc_dts.name]),
+              CONSTRAINT [name]_[link.name]_fk FOREIGN KEY ([for_key.name]) REFERENCE [link.name]_l );
     
 Sat_multi_version:
-    sat:      CREATE TABLE {name}_s (
-              {hub.nat_keys},
-              {other_key}, 
+    sat:      CREATE TABLE [name]_s (
+              [hub.nat_keys],
+              [other_key.name] [other_key.format], 
               effective_date DATE NOT NULL,
               expiration_date DATE NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
-              {atts},
+              [atts.name] [atts.format],
               process_id NUMBER(9),
               update_process_id NUMBER(9),
               rec_src VARCHAR2(200),
-              CONSTRAINT {name}_pk PRIMARY_KEY ({hub.nat_keys}, {other_key}, effective_date),
-              CONSTRAINT {name}_{hub.name}_fk FOREIGN KEY ({hub.nat_keys}) REFERENCE {hub.name}_h
-              );
+              CONSTRAINT [name}_pk PRIMARY_KEY ([hub.nat_keys], [other_key], effective_date),
+              CONSTRAINT [name]_[hub.name]_fk FOREIGN KEY ([hub.nat_keys]) REFERENCE [hub.name]_h );
     
     satlink:  TODO...CREATE TABLE {name}_sl (
               {link.sur_key} NUMBER(9),
@@ -228,8 +229,7 @@ Sat_multi_version:
               update_process_id NUMBER(9),
               rec_src VARCHAR2(200),
               CONSTRAINT {name}_pk PRIMARY_KEY ({link.sur_key}, effective_date),
-              CONSTRAINT {name}_{link.name}_fk FOREIGN KEY ({hub.sur_key}) REFERENCE {hub.name}_h
-              );  
+              CONSTRAINT {name}_{link.name}_fk FOREIGN KEY ({hub.sur_key}) REFERENCE {hub.name}_h );  
 
 """
 template = yaml.load(ddl_template)
@@ -239,24 +239,23 @@ def test_resolve_keyword():
     
     hub1 = Hub()
     hub1.name = 'hub1'
-    assert resolve_keyword(hub1, "(({name}")[0] == hub1.name 
-    assert resolve_keyword(hub1, "*({name} no_suffix ")[0] == hub1.name
-    assert resolve_keyword(hub1, "{name}_suffix ", mandatory=True)[0] == hub1.name + "_suffix"                          
-    assert resolve_keyword(hub1, " {dummy}") is None
+    assert resolve_keyword(hub1, "(([name]")[0] == hub1.name 
+    assert resolve_keyword(hub1, "*([name] no_suffix ")[0] == hub1.name
+    assert resolve_keyword(hub1, "[name]_suffix ", mandatory=True)[0] == hub1.name + "_suffix"                          
+    assert resolve_keyword(hub1, " [dummy]") is None
     with pytest.raises(Exception) as e:
-        resolve_keyword(hub1, " {dummy}", mandatory=True)
+        resolve_keyword(hub1, " [dummy]", mandatory=True)
     assert e.value.__class__ == DefinitionError
     with pytest.raises(Exception) as e:
-        resolve_keyword(hub1, " {dummy}", mandatory=True)
+        resolve_keyword(hub1, " [dummy]", mandatory=True)
     assert e.value.__class__ == DefinitionError
-
     
     hub2 = Hub()
     hub2.name = 'hub2'
     link = Link()
     link.hubs = [hub1, hub2]
-    assert resolve_keyword(link, "{hubs.name}") == ['hub1','hub2']
-    assert resolve_keyword(link, "{hubs.name}_s") == ['hub1_s','hub2_s']                           
+    assert resolve_keyword(link, "[hubs.name]") == ['hub1','hub2']
+    assert resolve_keyword(link, "[hubs.name]_s") == ['hub1_s','hub2_s']                           
 
 #propose strag:
 #- replace {name} as easy

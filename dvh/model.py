@@ -177,23 +177,23 @@ class DDLGenerator(object):
         
         raise NotImplementedError
 
-def resolve_keyword(dv_obj, txt_curly, mandatory=False):
-    """Resolve txt '{obj.prop}_suffix' and return a list of string appended with any suffix found from txt_curly"""
+def resolve_keyword(dv_obj, txt_bracket, mandatory=False):
+    """Resolve txt '[obj.prop]_suffix' and return a list of string appended with any suffix found from txt_bracket"""
     def try_resolve(obj, attr, mandatory):
-        # don't need to try/except, objects do not raise AttributeError on missing attribute 
+        # no try/except, dv objects don't raise AttributeError on missing attribute
         val = getattr(obj, attr)
         if val is None and mandatory:
             raise DefinitionError(obj, "Mandatory attribute '{}' not resolvable".format(attr))
         return val   
-    
-    close_idx = txt_curly.index('}')
-    keyword = txt_curly[txt_curly.index('{')+1:close_idx].strip()
+    open_idx = txt_bracket.index('[')
+    close_idx = txt_bracket.index(']')
+    keyword = txt_bracket[open_idx+1:close_idx].strip()
     suffix = ""
-    if close_idx < len(txt_curly)-1 and  txt_curly[close_idx+1] != " ":
-        suffix = txt_curly[txt_curly.index('}')+1:].strip()
+    if close_idx + 1 < len(txt_bracket) and txt_bracket[close_idx+1] != " ":
+        suffix = txt_bracket[close_idx+1:].strip()
     kw = keyword.split(".")
     if  len(kw) > 2:
-        raise DefinitionError(dv_obj, "resolving attribute '{0}' with more than 2 levels not supported".format(keyword))
+        raise DefinitionError(dv_obj, "resolving attribute '{0}' is supported at only 2 levels".format(keyword))
     # one "." 
     elif len(kw) == 2:
         parent = try_resolve(dv_obj, kw[0], mandatory)
@@ -215,12 +215,24 @@ def resolve_keyword(dv_obj, txt_curly, mandatory=False):
         return [value + suffix] 
     else:
         raise Exception("Unexpected programming error")
+             
+
+def process_ddl_line(line):
+    
+    def resolve_with_default(dv_obj, exp_with_default):
         
+        args = exp_with_default.split(',')
+        val =  resolve_keyword(dv_obj, args[0])
+        if val is None:
+            default = args[0]
+        pass
+        
+
         
 class DDLObject(object):
-    
     # capture one '(' plus any chars, followed by ',' plus any chars, followed by one or more ')'
     regex_with_default = re.compile(r'(\([^,]+,[^\)]+\)+)')
+    
     regex_curly = re.compile(r'{([^}]+)}')
         
     def __init__(self, dv_obj, template):
@@ -235,10 +247,7 @@ class DDLObject(object):
         ddl = None
         # 1st process default value --> (attr, default)
         for exp in self.regex_with_default.findall(self.template):
-            args = exp.split(',')
-            val =  resolve_keyword(args[0]) 
-            if val is None:
-                default = args[0]
+            pass
                 # TODO.. to continue
         
     
