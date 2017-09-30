@@ -150,106 +150,122 @@ yaml.register_class(SatLink)
 # Generators assume objects satisfy model-rule (validate_model() called prior and raised no Exceptions)
 
 class DDLGenerator(object):
+    # used in conjunction with defaults found in template which have precendence over next values
+    default_default = { 'hub':      {'sur_key.name': "<name>_key", 'sur_key.format': "NUMBER(9)"},
+                        'link':     {'sur_key.name': "<name>_key", 'for_keys.name': "<hubs.primary_key>"},
+                        'sat':      {'for_key.name': "<hub.primary_key>", 'lfc_dts': "effective_date"},
+                        'satlink':  {'for_key.name': "<link.sur_key>", 'lfc_dts': "effective_date"} }
     
-    # ddl_templates is a dict read off from yaml file (either inside model or separate file and easily customize by user)
-    def __init__(self, dv_model, ddl_templates):
+    # ddl_template is a dict read off from yaml file (either inside model or separate file defined by user)
+    def __init__(self, dv_model, ddl_template):
         self.dv_model = dv_model
-        # standardize all keys to be case insensitive
-        for key, value in ddl_templates:
-            ddl_templates.setdefault(key.lower(), value) 
-        self.ddl_templates = ddl_templates
+        self.ddl_template = dict(ddl_template)
+        self.defaults = dict(ddl_template.get('defaults'))
     
     def ddl_template(self, dv_obj):
         # custom template 
-        if dv_obj.ddl_template:
-            template = self.ddl_templates.get(dv_obj.ddl_template.lower())
+        if dv_obj.ddl_custom:
+            template = self.ddl_template[dv_obj.ddl_custom]
         else:
-            template = self.ddl_templates.get(dv_obj.__class__.lower())
+            template = self.ddl_template[dv_obj.__class__.__name__]
         if template is None:
             raise DefinitionError(dv_obj, "DDL template '{0}' definition not found".format(template))
         return template
+                  
     
-        
     def validate_ddl(self):
         raise NotImplementedError
         
-    def ddl(self):     
+    def ddl(self):
+        for name, dv_obj in self.dv_model.tables:
+            ddl_obj = DDLObject(dv_obj, self.ddl_template(dv_obj), self.defaults[dv_obj.__class__.__name__])
+            yield ddl_obj.ddl()
         
-        raise NotImplementedError
+                
+        
+class DDLObject(object):
+    regex_bracket = re.compile(r'(<[^>]+>)')
+    # special "comma case" ('<***,>')  where text is combined on same line
+    regex_special_comma = re.compile(r'(<[^>]+,>)')    
+           
+    def __init__(self, dv_obj, template, default_keywords):
+        self.dv_obj
+        self.template = template
+        self.default_keywords = default_keywords
+        
+    def substitute_text(self, text):
+        """Generate a number of new text where all <objs.prop> found are resolved. The number of text
+        generated depends on the number of elements returned while resolving.
+        """
+        keywords = regex_bracket.findall(text)
+        keywords_nobracket = [k[1:-1]  for k in keywords]
+        values_per_keyword = [ [v for v in resolve_with_default(dv_obj,kw,self.default_keywords)] for kw in keywords_nobracket]
+        
+        for no_line in range(values_per_keyword[0]):
+            txt_line = text
+            for i, kw in enumerate(keywords):
+                try:
+                    value = values_per_keyword[i][no_line]
+                except IndexError as er:
+                    raise DefinitionError(self.dv_obj, "Incompatible number of values resolved by '{}'".format(keywords[i]))
+                txt_line = txt_line.replace(kw, value)
+            yield txt_line
 
-def resolve_keyword(dv_obj, txt_bracket, mandatory=False):
-    """Resolve txt '[obj.prop]_suffix' and return a list of string appended with any suffix found from txt_bracket"""
-    def try_resolve(obj, attr, mandatory):
-        # no try/except, dv objects don't raise AttributeError on missing attribute
-        val = getattr(obj, attr)
-        if val is None and mandatory:
-            raise DefinitionError(obj, "Mandatory attribute '{}' not resolvable".format(attr))
-        return val   
-    open_idx = txt_bracket.index('[')
-    close_idx = txt_bracket.index(']')
-    keyword = txt_bracket[open_idx+1:close_idx].strip()
-    suffix = ""
-    if close_idx + 1 < len(txt_bracket) and txt_bracket[close_idx+1] != " ":
-        suffix = txt_bracket[close_idx+1:].strip()
+    def ddl(self):
+        ddl = self.template
+        # 1st process "comma case" 
+        for match in regex_special_comma.findall(self.template):
+            #programming check
+            match.index(',>')
+            kw = match.replace(',>','>')
+            ddl = ddl.replace(match, ", ".join(resolve_with_default(self.dv_obj, kw, self.default_keywords)))
+
+        # 2nd process normal multi-line case 
+        ddl_list = ddl.split("\n")
+        for i, line in enumerate(ddl_list):
+            if regex_bracket.search(line):
+                ddl_list[i:i+1] = self.substitute_text(line)
+        return "\n".join(ddl_list)
+                    
+
+def resolve_with_default(dv_obj, keyword, default_keywords):
+    """ Return values resolved by dv_obj, and when None resolve using the default_keyword found 
+    """
+    value = resolve(dv_obj, keyword)
+    if value is None:
+        default_kw = default_keywords.get(keyword)
+        if default_kw is None:
+            raise DefinitionError(dv_obj, "No default found for '{}'".format(keyword))
+        if regex_bracket.search(default_kw) is None:
+            return default_kw
+        value = resolve(dv_obj, default_kw)
+        if value is None:
+            raise DefinitionError(dv_obj, "Default keyword '{}' not resolvable".format(def_kw))
+        return value
+    
+                
+def resolve(dv_obj, keyword):
+    """Return values resolved by dv_obj using the keyword as an attribute
+    """
     kw = keyword.split(".")
     if  len(kw) > 2:
-        raise DefinitionError(dv_obj, "resolving attribute '{0}' is supported at only 2 levels".format(keyword))
-    # one "." 
-    elif len(kw) == 2:
-        parent = try_resolve(dv_obj, kw[0], mandatory)
+        raise DefinitionError(dv_obj, "Resolving attribute '{0}' more than 1 level not supported".format(keyword))
+    # no '.' 
+    elif len(kw) == 1:
+        value = [getattr(dv_obj, keyword)]
+    # one "."     
+    else:
+        parent = getattr(dv_obj, kw[0])
         if parent is None:
              return None
         elif isinstance(parent, list):
-            value = [try_resolve(child, kw[1], mandatory) for child in parent]
+            value = [getattr(child, kw[1]) for child in parent]
         else:
-            value = try_resolve(parent, kw[1], mandatory)
-    # no '.' 
-    else:
-        value = try_resolve(dv_obj, keyword, mandatory)
-   
-    if value is None:
-        return None    
-    elif isinstance(value, list):
-        return [v + suffix for v in value]
-    elif isinstance(value, str):
-        return [value + suffix] 
-    else:
-        raise Exception("Unexpected programming error")
-             
+            value = [getattr(parent, kw[1])]      
+    return value
 
-def process_ddl_line(line):
-    
-    def resolve_with_default(dv_obj, exp_with_default):
-        
-        args = exp_with_default.split(',')
-        val =  resolve_keyword(dv_obj, args[0])
-        if val is None:
-            default = args[0]
-        pass
-        
 
-        
-class DDLObject(object):
-    # capture one '(' plus any chars, followed by ',' plus any chars, followed by one or more ')'
-    regex_with_default = re.compile(r'(\([^,]+,[^\)]+\)+)')
-    
-    regex_curly = re.compile(r'{([^}]+)}')
-        
-    def __init__(self, dv_obj, template):
-        self.dv_obj
-        self.template = template
-    
-    def keywords_found(self):
-        regex_kw = re.compile("{(\w+_*)}")
-        return regex_kw.findall(self.template)
-    
-    def ddl(self):
-        ddl = None
-        # 1st process default value --> (attr, default)
-        for exp in self.regex_with_default.findall(self.template):
-            pass
-                # TODO.. to continue
-        
+  
     
 class DMLGenerator(object):
     def __init__(self, obj):
