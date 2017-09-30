@@ -239,24 +239,22 @@ def test_resolve_keyword():
     
     hub1 = Hub()
     hub1.name = 'hub1'
-    assert resolve_keyword(hub1, "((<name>")[0] == hub1.name 
-    assert resolve_keyword(hub1, "*(<name> no_suffix ")[0] == hub1.name
-    assert resolve_keyword(hub1, "<name>_suffix ", mandatory=True)[0] == hub1.name + "_suffix"                          
-    assert resolve_keyword(hub1, " <dummy>") i
-    s None
-    with pytest.raises(Exception) as e:
-        resolve_keyword(hub1, " <dummy>", mandatory=True)
-    assert e.value.__class__ == DefinitionError
-    with pytest.raises(Exception) as e:
-        resolve_keyword(hub1, " <dummy>", mandatory=True)
-    assert e.value.__class__ == DefinitionError
-    
+    assert resolve(hub1, "name")[0] == hub1.name 
+    assert resolve(hub1, "dummy")[0] is None
+    assert resolve_with_default(hub1, "<name>", {})[0] == hub1.name
+    with pytest.raises(DefinitionError) as ex:
+       resolve_with_default(hub1, "<dummy>", {})
+    assert resolve_with_default(hub1, "<dummy>", {'dummy': 'testdummy'}) == 'testdummy'
+    assert resolve_with_default(hub1, "<dummy>", {'dummy': '<name>'})[0] == hub1.name
+                                
     hub2 = Hub()
     hub2.name = 'hub2'
     link = Link()
     link.hubs = [hub1, hub2]
-    assert resolve_keyword(link, "<hubs.name>") == ['hub1','hub2']
-    assert resolve_keyword(link, "<hubs.name>_s") == ['hub1_s','hub2_s']                           
+    assert resolve(link, "hubs.name") == ['hub1','hub2']
+    
+    
+    
 
 #propose strag:
 #- replace {name} as easy

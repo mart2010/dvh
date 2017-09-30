@@ -171,22 +171,17 @@ class DDLGenerator(object):
         if template is None:
             raise DefinitionError(dv_obj, "DDL template '{0}' definition not found".format(template))
         return template
-                  
-    
-    def validate_ddl(self):
-        raise NotImplementedError
-        
+                          
     def ddl(self):
         for name, dv_obj in self.dv_model.tables:
             ddl_obj = DDLObject(dv_obj, self.ddl_template(dv_obj), self.defaults[dv_obj.__class__.__name__])
             yield ddl_obj.ddl()
         
-                
         
 class DDLObject(object):
-    regex_bracket = re.compile(r'(<[^>]+>)')
+    regex_bracket = re.compile(r'(<[^>]+>)') 
     # special "comma case" ('<***,>')  where text is combined on same line
-    regex_special_comma = re.compile(r'(<[^>]+,>)')    
+    regex_comma = re.compile(r'(<[^>]+,>)')    
            
     def __init__(self, dv_obj, template, default_keywords):
         self.dv_obj
@@ -197,9 +192,8 @@ class DDLObject(object):
         """Generate a number of new text where all <objs.prop> found are resolved. The number of text
         generated depends on the number of elements returned while resolving.
         """
-        keywords = regex_bracket.findall(text)
-        keywords_nobracket = [k[1:-1]  for k in keywords]
-        values_per_keyword = [ [v for v in resolve_with_default(dv_obj,kw,self.default_keywords)] for kw in keywords_nobracket]
+        keywords = self.regex_bracket.findall(text)
+        values_per_keyword = [ [v for v in resolve_with_default(self.dv_obj,kw,self.default_keywords)] for kw in keywords]
         
         for no_line in range(values_per_keyword[0]):
             txt_line = text
@@ -214,7 +208,7 @@ class DDLObject(object):
     def ddl(self):
         ddl = self.template
         # 1st process "comma case" 
-        for match in regex_special_comma.findall(self.template):
+        for match in self.regex_comma.findall(self.template):
             #programming check
             match.index(',>')
             kw = match.replace(',>','>')
@@ -223,29 +217,31 @@ class DDLObject(object):
         # 2nd process normal multi-line case 
         ddl_list = ddl.split("\n")
         for i, line in enumerate(ddl_list):
-            if regex_bracket.search(line):
+            if self.regex_bracket.search(line):
                 ddl_list[i:i+1] = self.substitute_text(line)
         return "\n".join(ddl_list)
                     
 
 def resolve_with_default(dv_obj, keyword, default_keywords):
-    """ Return values resolved by dv_obj, and when None resolve using the default_keyword found 
+    """ Return values resolved by dv_obj, and when None resolve using the default_keyword found
+    Argument keyword is with bracket!!
     """
+    keyword = keyword[keyword.index('<')+1:keyword.index('>')].strip()
     value = resolve(dv_obj, keyword)
-    if value is None:
+    if value is None or (len(value) == 1 and value[0] is None):
         default_kw = default_keywords.get(keyword)
         if default_kw is None:
             raise DefinitionError(dv_obj, "No default found for '{}'".format(keyword))
-        if regex_bracket.search(default_kw) is None:
+        if DDLObject.regex_bracket.search(default_kw) is None:
             return default_kw
-        value = resolve(dv_obj, default_kw)
+        value = resolve(dv_obj, default_kw[default_kw.index('<')+1:default_kw.index('>')].strip())
         if value is None:
-            raise DefinitionError(dv_obj, "Default keyword '{}' not resolvable".format(def_kw))
-        return value
+            raise DefinitionError(dv_obj, "Default keyword '{}' not resolvable".format(default_kw.strip()))
+    return value
     
                 
 def resolve(dv_obj, keyword):
-    """Return values resolved by dv_obj using the keyword as an attribute
+    """Return values resolved by dv_obj using the keyword as an attribute.  Argumemt keyword without bracket.
     """
     kw = keyword.split(".")
     if  len(kw) > 2:
