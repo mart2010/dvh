@@ -1,0 +1,131 @@
+!DVModel
+       -- these are the default's default (only need to keep the ones where these default's value are changed)
+       defaults:
+            Hub:  {sur_key.name: <name>_key, sur_key.format: number(9), sur_key.seq = <name>_seq}
+            Link: {sur_key.name: <name>_key, sur_key.format: number(9), sur_key.seq = <name>_seq, for_keys.name = <hubs.primary_key>, for_keys.format = <hubs.primary_key_format>}
+            Sat:  {for_key.name: <hub.primary_key>, for_key.format: <hub.primary_key_format>, lfc.name: effective_date, lfc.exp: expiration_date, lfc.format: date}
+            
+            
+       tables: 
+            rcent_organisation: !Hub &rcent_organisation 
+                nat_keys:
+                    - {name: org_cantid, format: number(9), src: cantonalid_org}
+                src: hubref_dsa.dsa_rcent_org
+                    
+            rcent_location: !Hub &rcent_location
+                nat_keys:
+                    - {name: loc_cantid, format: number(9), src: cantonalid_loc}
+                src: hubref_dsa.dsa_rcent_loc
+
+            rcent_org_loc: &rcent_org_loc !Link
+                hubs: [*rcent_organisation, *rcent_location]
+                src: hubref_dsa.dsa_rcent_loc
+                
+            rcent_reeregister: !Sat
+                hub: *rcent_organisation
+                lfc: {src: batch_date}
+                oth_key: {name: beginvalidity_date, format: date, src: beginvaliditydate}
+                atts: 
+                    - {name: ch_bur_id, format: number(10), src: orgids_ch_bur}  
+                    - {name: noga_code, format: number(6), src: noga_code_org}
+                    - {name: status_id, format: number(1), src: register_status}
+                    - {name: org_type_id, format: varchar2(3), src: kind_burenterprise_unit}
+                    - {name: sector_id, format: varchar2(3), src: institute_sector}                    
+                    - {name: num_locals, format: number(6), src: nb_of_locals}                 
+                    - {name: sizeclass_id, format: number(2), src: size_class}
+                    - {name: entry_date, format: date, src: registration_date}
+                src: hubref_dsa.dsa_rcent_org
+      
+            rcent_name_form: !Sat
+                hub: *rcent_location
+                lfc: {src: batch_date}
+                oth_key: {name: beginvalidity_date, format: date, src: beginvaliditydate}
+                atts: 
+                    - {name: name, format: varchar2(255), src: name}
+                    - {name: additional_name, format: varchar2(255), src: additional_name}
+                    - {name: usual_name, format: varchar2(255), src: usual_name}
+                    - {name: kindof_id, format: number(1), src: kind_of_location}
+                    - {name: legalform_id, format: varchar2(4), src: legal_form}
+                    - {name: noga_code, format: number(6), src: noga_code}
+                src: hubref_dsa.dsa_rcent_loc
+
+            rcent_identifiers: !Sat
+                hub: *rcent_location
+                lfc: {src: batch_date}
+                oth_key: {name: beginvalidity_date, format: date, src: beginvaliditydate}
+                atts: 
+                    - {name: ch_ide, format: varchar2(12), src: locids_ch_ide}
+                    - {name: ch_ide_tva, format: varchar2(12), src: locids_ch_ide_tva}
+                    - {name: ch_ofrc, format: number(7), src: locids_ch_ofrc}
+                    - {name: ch_rc, format: varchar2(18), src: locids_ch_rc}
+                    - {name: ch_tva, format: varchar2(6), src: locids_ch_tva}
+                    - {name: vd_rc, format: varchar2(10), src: locids_vd_rc}
+                    - {name: ch_bur, format: number(10), src: locids_ch_bur}
+                src: hubref_dsa.dsa_rcent_loc
+                
+            rcent_seat_address: !Sat
+                hub: *rcent_location
+                lfc: {src: batch_date}
+                oth_key: {name: beginvalidity_date, format: date, src: beginvaliditydate}
+                atts: 
+                    - {name: mun_id, format: number(4), src: municipality_id}
+                    - {name: mun_name, format: varchar2(50), src: municipality_name}
+                    - {name: canton, format: varchar2(2), src: canton_abbreviation}
+                    - {name: history_mun_id, format: number(5), src: history_municipality_id}
+                    - {name: legal_line1, format: varchar2(255), src: legal_line1}
+                    - {name: legal_line2, format: varchar2(255), src: legal_line2}
+                    - {name: legal_street, format: varchar2(255), src: legal_street}
+                    - {name: legal_house_no, format: varchar2(50), src: legal_house_no}
+                    - {name: legal_dwelling_no, format: varchar2(50), src: legal_dwelling_no}
+                    - {name: legal_postoffice_box, format: varchar2(50), src: legal_postoffice_box}
+                    - {name: legal_postoffice_boxno, format: number(4), src: legal_postoffice_box_no}
+                    - {name: legal_locality, format: varchar2(255), src: legal_locality}
+                    - {name: legal_town, format: varchar2(255), src: legal_town}
+                    - {name: legal_zip, format: number(4), src: legal_zip}
+                    - {name: legal_country_iso2, format: varchar2(2), src: legal_country_iso2}
+                    - {name: legal_federal_buildingid, format: number(9), src: legal_federal_buildingid}
+                    - {name: legal_xcoord, format: number(6), src: legal_xcoord}
+                    - {name: legal_ycoord, format: number(6), src: legal_ycoord}
+                    - {name: effective_line1, format: varchar2(255), src: effective_line1}
+                    - {name: effective_line2, format: varchar2(255), src: effective_line2}
+                    - {name: effective_street, format: varchar2(255), src: effective_street}
+                    - {name: effective_house_no, format: varchar2(50), src: effective_house_no}
+                    - {name: effective_dwelling_no, format: varchar2(50), src: effective_dwelling_no}
+                    - {name: effective_postoffice_box, format: varchar2(50), src: effective_postoffice_box}
+                    - {name: effective_postoffice_boxno, format: number(4), src: effective_postoffice_box_no}
+                    - {name: effective_locality, format: varchar2(255), src: effective_locality}
+                    - {name: effective_town, format: varchar2(255), src: effective_town}
+                    - {name: effective_zip, format: number(4), src: effective_zip}
+                    - {name: effective_country_iso2, format: varchar2(2), src: effective_country_iso2}
+                    - {name: effective_federal_buildingid, format: number(9), src: effective_federal_buildingid}
+                    - {name: effective_xcoord, format: number(6), src: effective_xcoord}
+                    - {name: effective_ycoord, format: number(6), src: effective_ycoord}
+                src: hubref_dsa.dsa_rcent_loc
+
+            rcent_register: !Sat
+                hub: *rcent_location
+                lfc: {src: batch_date}
+                oth_key: {name: beginvalidity_date, format: date, src: beginvaliditydate}
+                atts: 
+                    - {name: comm_registration_id, format: number(1), src: comm_registration_status}
+                    - {name: comm_registration_date, format: date(), src: comm_registration_date}
+                    - {name: comm_deregistration_date, format: date(), src: comm_deregistration_date}
+                    - {name: comm_vdregistration_date, format: date(), src: comm_vdregistration_date}
+                    - {name: comm_vdderegistration_date, format: date(), src: comm_vdderegistration_date}
+                    - {name: comm_capitaltype_id, format: number(1), src: comm_capitaltype_id}
+                    - {name: comm_currency, format: varchar2(3), src: comm_currency}
+                    - {name: comm_capital_amount, format: number(*,2), src: comm_capital_amount}
+                    - {name: comm_cashedin_amount, format: number(*,2), src: comm_cashedin_amount}
+                    - {name: comm_bylaws_date, format: date(), src: comm_bylawsdate}
+                    - {name: ide_status_id, format: number(1), src: ide_registration_status}
+                    - {name: ide_type_id, format: number(2), src: ide_kindof_uidentity}
+                    - {name: ide_public_status, format: number(1), src: ide_public_status}
+                    - {name: ide_liquidation_id, format: number(1), src: ide_deregistration_reason}
+                    - {name: vat_status_id, format: number(1), src: vat_registration_status}
+                    - {name: vat_registration_date, format: date(), src: vat_registration_date}
+                    - {name: vat_deregistration_date, format: date(), src: vat_deregistration_date}
+                    - {name: comm_weblink, format: varchar2(150), src: comm_weblink}
+                    - {name: comm_division, format: varchar2(255), src: comm_division}
+                    - {name: comm_purpose, format: varchar2(1000), src: comm_purpose}
+                src: hubref_dsa.dsa_rcent_loc
+

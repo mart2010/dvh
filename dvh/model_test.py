@@ -8,26 +8,6 @@ import sys
 def simple_model():
     pass
 
-## ------------------------------------------------------------------------------------------- ##
-##          Test yaml Loading of model eand model rules checks
-## ------------------------------------------------------------------------------------------- ##
-
-def test_default_att():
-    y_t = """
-        !Hub
-            nat_keys:
-                - {name: h1_id, format: number(9)}
-                - {name: h2_id, format: date} 
-        """
-    h = yaml.load(y_t)
-    assert h.sur_key is None
-    assert h.nat_keys[0]['name'] == 'h1_id'
-    assert h.nat_keys[0]['format'] == 'number(9)'
-    assert h.nat_keys[1].get('name') == 'h2_id'
-    assert h.nat_keys[1].get('size') is None
-    #print(repr(h))
-   
-    
 def callfct(function_call, error_expected=None):
     if error_expected:
         with pytest.raises(Exception) as e:
@@ -36,8 +16,183 @@ def callfct(function_call, error_expected=None):
             assert e.value.__class__ == error_expected
     else:
         function_call()
- 
-def test_hub():
+
+    
+    
+## ------------------------------------------------------------------------------------------- ##
+##          Test yaml Loading of model and model rules checks
+## ------------------------------------------------------------------------------------------- ##
+yaml = ruamel.yaml.YAML()
+yaml.register_class(DVModel)
+yaml.register_class(Hub)
+yaml.register_class(Sat)
+yaml.register_class(Link)
+yaml.register_class(SatLink)
+
+def test_yaml_and_resolve_atts():
+    y_t = """
+    tables: 
+        hub: &hub !Hub
+            name:  myhub
+            nat_keys:
+                - {name: h1_id, format: number(9)}
+                - {name: h2_id}
+            sur_key: {}
+        sat: &sat !Sat
+            hub:  *hub
+            att1: att1value
+            list_vals:
+                - val1
+                - val2
+            list_dics:
+                - {name: h1_id, format: number(9)}
+                - {name: h2_id}
+            empty_dic: {}
+            val_dic: {name: vdic_name, fmt: vdic_fmt}
+        """
+    m = yaml.load(y_t)
+    h = m['tables']['hub']
+    assert h.nat_keys[0]['name'] == 'h1_id'
+    assert h.nat_keys[0]['format'] == 'number(9)'
+    assert h.nat_keys[1].get('name') == 'h2_id'
+    assert h.nat_keys[1].get('format') is None
+    assert h.sur_key == {}
+    assert getattr(h, 'missing_att', None) is None
+    try:
+        getattr(h, 'missing_att') 
+    except AttributeError:
+        assert True
+    else:
+        assert False
+    
+    s = m['tables']['sat']
+    assert s.resolve(txt='constant', scalar=True, mandatory=True) == "constant"
+    assert s.resolve(txt='<att1>', scalar=True, mandatory=True) == "att1value"
+    assert s.resolve(txt='prefix_<att1>_postfix', scalar=False, mandatory=True) == ["prefix_att1value_postfix"]
+    
+    assert s.resolve(txt='<list_vals>', scalar=False, mandatory=True) == ["val1","val2"]
+    assert s.resolve(txt='<list_vals>', scalar=True, mandatory=True) == "val1, val2"
+
+    assert s.resolve(txt='prefix_<list_dics.name>_postfix', scalar=False, mandatory=True) == ["prefix_h1_id_postfix", "prefix_h2_id_postfix"]
+    assert s.resolve(txt='<missing_att>', scalar=True, mandatory=False) is None
+    try:
+        s.resolve(txt='<missing_att>', scalar=True, mandatory=True)
+    except DefinitionError:
+        assert True
+
+    assert s.resolve(txt='<empty_dic>', scalar=False, mandatory=True) == {}
+    assert s.resolve(txt='<val_dic.name>', scalar=True, mandatory=True) == 'vdic_name'
+    assert s.resolve(txt='<hub.name>', scalar=True, mandatory=True) == 'myhub'
+    
+dvmodel_txt = """
+!DVModel
+       defaults:
+            Hub: {sur_key.format: "DUMMY_F"}
+       tables: 
+            h_surkey_nats: &h_surkey_nats !Hub
+                sur_key: {}
+                nat_keys:
+                    - {name: h11_id, format: number(3)}
+                    - {name: h12_id, format: char(10)} 
+                    
+            h_no_surkey_one_nat: &h_no_surkey_one_nat !Hub
+                nat_keys:
+                    - {name: h2_id, format: number(9)}
+
+            l_no: !Link
+                hubs: [*h_surkey_nats, *h_no_surkey_one_nat]
+                
+            l_surkey: !Link
+                hubs: [*h_surkey_nats, *h_no_surkey_one_nat]
+                sur_key: {name: my_sur}
+                
+            l_forkey: !Link
+                hubs: [*h_surkey_nats, *h_no_surkey_one_nat]
+                for_keys: [f1, f2]
+                
+            s_noforkey: !Sat
+                hub:  *h_surkey_nats
+                atts:
+                    - {name: att1, format: number}
+                    - {name: att2, format: varchar2(10)}
+                lfc_dts: {name: valid_from}
+                
+            s_forkey: !Sat
+                hub:  *h_surkey_nats
+                atts:
+                    - {name: att1, format: int}
+                for_key: {'name': 'fk_name'} 
+"""
+dvmodel = yaml.load(dvmodel_txt)
+dvmodel.init_model()
+
+def test_ddl_setup():
+    dvmodel.setup(get_template_SQL(), sql_type="DDL")
+    
+    with_sur = dvmodel.tables['h_surkey_nats']
+    assert with_sur.name == 'h_surkey_nats'
+    assert with_sur.sur_key['name'] == 'h_surkey_nats_key'
+    assert with_sur.sur_key['format'] == with_sur.defaults['sur_key.format']
+    assert with_sur.primary_key == 'h_surkey_nats_key'
+    assert with_sur.unique_key == 'h11_id, h12_id'
+    
+    no_sur = dvmodel.tables['h_no_surkey_one_nat']
+    assert getattr(no_sur, 'sur_key', None) is None
+    assert no_sur.primary_key == 'h2_id'
+    assert getattr(no_sur, 'unique_key', None) is None
+    
+    l_no = dvmodel.tables['l_no']
+    assert l_no.sur_key['name'] == 'l_no_key'
+    assert l_no.sur_key['format'] == l_no.defaults['sur_key.format'] 
+    l_surkey = dvmodel.tables['l_surkey']
+    assert l_surkey.sur_key['name'] == "my_sur"
+    assert l_surkey.sur_key['format'] == l_surkey.defaults['sur_key.format']
+    assert l_surkey.for_keys[0] == {'name':with_sur.primary_key, 'format':with_sur.primary_key_format}
+    assert l_surkey.for_keys[1] == {'name':no_sur.primary_key, 'format':no_sur.primary_key_format}
+    
+    l_forkey = dvmodel.tables['l_forkey']
+    assert l_forkey.for_keys[0] == {'name':"f1", 'format':with_sur.primary_key_format} 
+    assert l_forkey.for_keys[1] == {'name':"f2", 'format':no_sur.primary_key_format} 
+    
+    s_noforkey = dvmodel.tables['s_noforkey']
+    assert s_noforkey.for_key == {'name': with_sur.primary_key, 'format': with_sur.primary_key_format}
+    assert s_noforkey.lfc_dts == {'name': 'valid_from', 'format': s_noforkey.defaults['lfc_dts.format']}
+    assert s_noforkey.primary_key ==  s_noforkey.for_key['name'] + ", " + s_noforkey.lfc_dts['name']
+                                  
+    s_forkey = dvmodel.tables['s_forkey']
+    assert s_forkey.for_key == {'name': 'fk_name', 'format': s_forkey.hub.primary_key_format}
+    assert getattr(s_forkey, 'lfc_dts', None) is None
+    assert s_forkey.primary_key ==  s_forkey.for_key['name']
+    assert getattr(s_forkey, 'lfc_dts', None) is None
+    assert s_forkey.atts[0]['name'] ==  'att1'
+    assert s_forkey.atts[0]['format'] ==  'int'
+
+    
+    with_sur_ddl = with_sur.DDL.splitlines()
+    assert with_sur_ddl[0] == "CREATE TABLE h_surkey_nats_h ("
+    assert with_sur_ddl[1] == "h_surkey_nats_key DUMMY_F,"
+    assert with_sur_ddl[2] == "h11_id number(3) NOT NULL,"
+    assert with_sur_ddl[3] == "h12_id char(10) NOT NULL,"
+    assert with_sur_ddl[4] == "load_dts DATE NOT NULL,"
+    assert with_sur_ddl[5] == "last_seen_date DATE,"
+    assert with_sur_ddl[6] == "process_id NUMBER(9),"
+    assert with_sur_ddl[7] == "rec_src VARCHAR2(200),"
+    assert with_sur_ddl[8] == "UNIQUE (h11_id, h12_id),"
+    assert with_sur_ddl[9] == "CONSTRAINT h_surkey_nats_pk PRIMARY_KEY (h_surkey_nats_key)"
+    assert with_sur_ddl[10] == ");"
+
+        
+def test_dml_setup():    
+    dvmodel.setup(get_template_SQL(), sql_type="DML")
+    
+    pass
+    
+
+    
+
+def test_validate_rules():
+# Still TORUN....
+    # ------------------ Hub ------------------
     inval_nat_keys = """
         !Hub
             nat_keys:
@@ -67,19 +222,19 @@ def test_hub():
     assert isinstance(s_o.sur_key, dict)
     callfct(s_o.validate_model)
 
+    # ------------------ Link ------------------
     
-dv_2hubs_txt = \
-"""!DVModel
-       tables: 
-            h1: &h1 !Hub
-                nat_keys:
-                    - {name: h1_id, format: number}
-            h2: !Hub &h2
-                nat_keys: 
-                    - {name: h2_id, format: number}                 
-"""
- 
-def test_link(): 
+    dv_2hubs_txt = \
+    """!DVModel
+           tables: 
+                h1: &h1 !Hub
+                    nat_keys:
+                        - {name: h1_id, format: number}
+                h2: !Hub &h2
+                    nat_keys: 
+                        - {name: h2_id, format: number}                 
+    """
+
     l_one_hub = dv_2hubs_txt + """
             l1: !Link
                 hubs: [*h1]
@@ -97,13 +252,12 @@ def test_link():
     assert s_o.tables['l1'].hubs[0] is s_o.tables['h1'] 
     assert s_o.tables['l1'].hubs[1] is s_o.tables['h2'] 
     assert isinstance(s_o.tables['l1'].sur_key, dict)
-    
     callfct(s_o.validate_model)
     
     link_with_fkey_mismatch = dv_2hubs_txt + """
             l1: !Link
                 hubs: [*h1, *h2]
-                for_keys: [{name: fk_h1}]
+                for_keys: [fk_h1]
                 sur_key: {name: my_sur}
     """
     s_o = yaml.load(link_with_fkey_mismatch)
@@ -113,13 +267,14 @@ def test_link():
     link_with_fkey_ok = dv_2hubs_txt + """
             l1: !Link
                 hubs: [*h1, *h2]
-                for_keys: [{name: fk_h1}, {name: fk_h2}]
+                for_keys: [fk_h1, fk_h2]
                 sur_key: {name: my_sur}
     """
     s_o = yaml.load(link_with_fkey_ok)
     callfct(s_o.validate_model)
  
-def test_sat():
+    # ------------------ Sat ------------------
+
     s_no_hub  = dv_2hubs_txt + """
             s1: !Sat 
                 hubbb: *h1 
@@ -141,168 +296,13 @@ def test_sat():
     assert s_o.tables['s1'].atts[0]['name'] == 'att1' 
     callfct(s_o.validate_model)
 
+
     
 ## ------------------------------------------------------------------------------------------- ##
 ##          Test DDL generation
 ## ------------------------------------------------------------------------------------------- ##
 
-ddl_template = """
-defaults:
-    hub:  {sur_key.name: "<name>_key", sur_key.format: NUMBER(9)}
-    link: {sur_key.name: "<name>_key", for_keys.name: "<hubs.primary_key>" }
-    sat:  {for_key.name: "<hub.primary_key>", lfc_dts: effective_date }
-    satlink:  {for_key.name: "<link.sur_key>", lfc_dts: effective_date }
-           
-hub:          CREATE TABLE <name>_h (
-              <sur_key.name> <sur_key.format>,
-              <nat_keys.name> <nat_keys.format> NOT NULL,
-              <extras.name> <extras.format>,
-              load_dts DATE NOT NULL,
-              last_seen_date DATE,
-              process_id NUMBER(9),
-              rec_src VARCHAR2(200),
-              CONSTRAINT <name>_pk PRIMARY_KEY (<sur_key.name>),
-              UNIQUE (<nat_keys.name,>));
-
-hub_no_sur:   CREATE TABLE <name>_h (
-              <nat_keys.name> <nat_keys.format>,
-              <extras.name> <extras.format>,
-              load_dts DATE NOT NULL,
-              last_seen_date DATE,
-              process_id NUMBER(9),
-              rec_src VARCHAR2(200),
-              CONSTRAINT <name>_pk PRIMARY_KEY (<nat_keys.name>));
-
-link:         CREATE TABLE <name>_l (
-              <sur_key.name> <sur_key.format>,
-              <for_keys.name> NOT NULL,     -- format FIXED to Hub's primary_key
-              <extras.name> <extras.format>,
-              load_dts NOT NULL,
-              last_seen_date DATE,
-              process_id NUMBER(9),
-              rec_src VARCHAR2(200),
-              CONSTRAINT <name>_pk PRIMARY_KEY (<sur_key.name>),
-              UNIQUE (<for_keys.name,>),
-              CONSTRAINT <name>_<hubs.name>_fk FOREIGN KEY (<for_keys.name>) REFERENCE <hubs.name>_h );
-    
-sat:          CREATE TABLE <name>_s (
-              <for_key.name>,                  -- format FIXED to Hub's primary_key
-              <lfc_dts.name> DATE NOT NULL,    --format FIXED to be aligned with expiration
-              expiration_date DATE NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
-              <atts.name> <atts.format>,
-              process_id NUMBER(9),
-              update_process_id NUMBER(9),
-              rec_src VARCHAR2(200),
-              CONSTRAINT <name>_pk PRIMARY_KEY (<for_key.name>, <lfc_dts.name>),
-              CONSTRAINT <name>_<hub.name>_fk FOREIGN KEY (<for_key.name>) REFERENCE <hub.name>_h );
-    
-satlink:      CREATE TABLE <name>_sl (
-              <for_key.name>,                     -- format FIXED to Link's primary_key
-              <lfc_dts.name> DATE NOT NULL,       -- format FIXED to be aligned with expiration
-              expiration_date NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
-              <atts.name>  <atts.format>,
-              process_id NUMBER(9),
-              update_process_id NUMBER(9),
-              rec_src VARCHAR2(200),
-              CONSTRAINT <name>_pk PRIMARY_KEY (<for_key.name>, <lfc_dts.name>),
-              CONSTRAINT <name>_<link.name>_fk FOREIGN KEY (<for_key.name>) REFERENCE <link.name>_l );
-    
-Sat_multi_version:
-    sat:      CREATE TABLE <name>_s (
-              <hub.nat_keys>,
-              <other_key.name> <other_key.format>, 
-              effective_date DATE NOT NULL,
-              expiration_date DATE NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
-              <atts.name> <atts.format>,
-              process_id NUMBER(9),
-              update_process_id NUMBER(9),
-              rec_src VARCHAR2(200),
-              CONSTRAINT <name}_pk PRIMARY_KEY (<hub.nat_keys>, <other_key>, effective_date),
-              CONSTRAINT <name>_<hub.name>_fk FOREIGN KEY (<hub.nat_keys>) REFERENCE <hub.name>_h );
-    
-    satlink:  TODO...CREATE TABLE <name>_sl (
-              <link.sur_key> NUMBER(9),
-              effective_date DATE NOT NULL,
-              expiration_date DATE NOT NULL DEFAULT to_date('40000101','YYYYMMDD'),
-              <atts>,
-              process_id NUMBER(9),
-              update_process_id NUMBER(9),
-              rec_src VARCHAR2(200),
-              CONSTRAINT <name>_pk PRIMARY_KEY (<link.sur_key>, effective_date),
-              CONSTRAINT <name>_<link.name>_fk FOREIGN KEY (<hub.sur_key>) REFERENCE <hub.name>_h );
-
-"""
-template = yaml.load(ddl_template)
-
-
-def test_resolve_keyword():
-    
-    hub1 = Hub()
-    hub1.name = 'hub1'
-    assert resolve(hub1, "name")[0] == hub1.name 
-    assert resolve(hub1, "dummy")[0] is None
-    assert resolve_with_default(hub1, "<name>", {})[0] == hub1.name
-    with pytest.raises(DefinitionError) as ex:
-       resolve_with_default(hub1, "<dummy>", {})
-    assert resolve_with_default(hub1, "<dummy>", {'dummy': 'testdummy'}) == 'testdummy'
-    assert resolve_with_default(hub1, "<dummy>", {'dummy': '<name>'})[0] == hub1.name
-                                
-    hub2 = Hub()
-    hub2.name = 'hub2'
-    link = Link()
-    link.hubs = [hub1, hub2]
-    assert resolve(link, "hubs.name") == ['hub1','hub2']
-    
-    
-    
-
-#propose strag:
-#- replace {name} as easy
-#- find the couple {} followed by space followed by any char  --> regex = r"({\w+})\s+(\S+)"
-#- resolve the att var if we find format attr then replace also the format (second element found (except if 'NOT'))  
-#-     
-    
-    
-def tst_hub_mapping():
-    hub_partial_mapping = """
-        !Hub
-            nat_keys:
-                h_id1: {format: number, size: 9, src: s_id1}
-                h_id2: {format: number, size: 9}
-            sur_key: {name: h_key1, format: number, size: 9}
-            src: src_hub
-        """
-    expect_err(hub_partial_mapping, nb_expected=2, validate_mapping_only=True)
-    
-    hub_ok_mapping = """
-        !Hub
-            nat_keys:
-                h_id1: {format: number, size: 9, src: s_id1}
-                h_id2: {format: number, size: 9, src: s_id2}
-            sur_key: {name: h_key1, format: number, size: 9, src: seq}
-            src: src_hub
-        """
-    expect_err(hub_ok_mapping, nb_expected=0, validate_mapping_only=True)
-
-   
 
     
-def tst_link_mapping():
     
-    l_hub_no_mapping = dv_2hubs_txt + """
-            l1: !Link
-                hubs: [*h1, *h2]
-                sur_key: {name: my_sur, src: my_seq}
-    """
-    expect_err(l_hub_no_mapping, 0, validate_mapping_only=True)
-    
-    l_hub_withfkeys_mapping = dv_2hubs_txt + """
-            l1: !Link
-                hubs: [*h1, *h2]
-                for_keys: [{name: fk1}, {name: fk2}]
-                sur_key: {name: my_sur, src: my_seq}
-                src: {name: src_tbl, hubs: [h1_src, h2_src]}, 
-    """
-    
-
 

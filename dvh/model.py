@@ -1,14 +1,10 @@
 # coding: utf-8
 import ruamel.yaml
 import re
-import abc
+import os
+from itertools import zip_longest
+import argparse
 
-# there will be a few type of errors/warnings:  
-    # - Yaml-related (syntaxic or technical issues causing yaml.load  model to fail ) --> catch e and raise "MyBusiness" from e  done from the model reader..
-    # - Domain/Model rules violation (domain-specific rules) raised from function: validate_model() (ex. a Link requires at least 2 hubs, a hub requires one ore more nat_keys
-    # - SourceMapping: invalid/missing attribute for generating DML... ...and raised from these
-
-    # 4- Log some warning, when generating code (DDL, DML...) requires falling back to default value  
 
 class BaseError(Exception):
     def __init__(self, obj, msg):
@@ -16,63 +12,266 @@ class BaseError(Exception):
         self.msg = msg
 
     def __str__(self):
-        return "Error for object {0} --> \t{1}".format(self.obj, self.msg)
+        return "Error for object {0}:\t{1}".format(self.obj, self.msg)
 
-class ModelRuleError(BaseError): pass
-    
+
+#For Domain/Model rules violation raised from function: Table.validate_rules()
+class ModelRuleError(BaseError):pass
+#Yaml-related causing yaml.load to fail, will raise DefinitionError by model reader...
 class DefinitionError(BaseError): pass
 
-class SourceMappingError(BaseError): pass
-        
 
 class DVModel(object):
-
-    def init_tables(self):
-        for k, v in self.tables.items():
-            v.define_name(k)    
-    
-    def validate_model(self):
+    """Represent a complete DataVault model as defined in one YAML document
+    """
+    def init_model(self):
         error = False
-        for o in self.tables.values():
+        for table_name, table_obj in self.tables.items():
+            df = None
+            if getattr(self, 'defaults', None) is not None:
+                df = self.defaults.get(table_obj.__class__.__name__)
             try:
-                o.validate_model()
+                table_obj.init(table_name, yaml_defaults=df)
             except (ModelRuleError, DefinitionError) as err:
                 print(err)
                 error = True
         if error:
-            raise ModelRuleError("Found YAML definition error")
-                                                
-    def tables_in_creation_order(self):
-        for k, _ in sorted(self.tables.items(), key=lambda kv: kv[1].creation_order + kv[0]):
-            # print("ddl order key:" + k)
-            yield k
-
-    def generate_ddl(self, with_drop=False):
-        if with_drop:
-            for n in reversed(self.tables_in_creation_order()):
-                print("I will drop: " + n)
-        for n in self.names_ddl_order():
-            print("I will create DDL for: " + n)
-
+            raise ModelRuleError(self, "Fix all model error(s) found in YAML definition")
+        self.tables_in_create_order = sorted(self.tables.values(), key=lambda v: v.creation_order + v.name)
         
-class ModelBase(object):
-
-    def define_name(self, name):
-        self.name = name
-    
-    def validate_model(self):
-        raise NotImplementedError        
+        
+    def setup(self, template_dic, sql_type="DDL"):
+        assert sql_type in ('DDL','DML')
+        for table_obj in self.tables_in_create_order:
+            tmpl = template_dic[sql_type + "_" + table_obj.__class__.__name__]
+            if getattr(table_obj, sql_type + "_custom", None) is not None:
+                tmpl = template_dic[sql_type + "_" + table_obj.__class__.__name__ + "_" + getattr(table_obj, sql_type + "_custom")]
+            if sql_type == "DDL":
+                table_obj.setup_DDL(template=tmpl)
+            elif sql_type == "DML":
+                table_obj.setup_DML(template=tmpl)
                   
-    # yaml.load() is not using __init__, so default attribute are generated dynamically
-    def __getattr__(self, name):
-        # otherwise yaml fails when accessing: data.__setstate__(state)
-        if name[:2] != '__':
-            default = None
-            setattr(self, name, default)
-            return default
-        else:
-            raise AttributeError("'{0}' object has no attribute '{1}'".format(self.__class__.__name__, name))
+    
+    def generate_ddl_stmts(self, with_sequence=True):
+        if with_sequence:
+            for t in reversed(self.tables_in_creation_order):
+                print("I will drop: " + t)
+        for t in self.tables_in_create_order:
+            yield t.DDL
+    
+    def generate_drop_stmts(self, as_proc=True):
+        # TODO implement drop stmtm indivudal or inside a single proc. (iterating an array of table name and a single catch error)
+        pass
 
+    def generate_ddl_grants(self, to_schema):
+        pass
+    
+    
+        
+class Table(object):
+    """Superclass for all table-type in a DV model. Subclass's roles are to enforce/validate model rules 
+    and to provide attribute values for DDL & DML generation.   They go through different states:
+        - State0: Instanciation from yaml doc (only attributes present in doc exist at this point) 
+        - State1: Initialized and Business rules validated; init() method 
+        - State2: All atts mandatory set and DDL constructed from template;  setup_DDL() 
+        - ...
+    """
+    # default's defaults (for cases where no default is set in yaml model)
+    defaults_default= { 'Hub':      {'sur_key.name': "<name>_key", 'sur_key.format': "number(9)"},
+                        'Link':     {'sur_key.name': "<name>_key", 'sur_key.format': "number(9)", 
+                                     'for_keys.name': "<hubs.primary_key>", 'for_keys.format': "<hubs.primary_key_format>"},
+                        'Sat':      {'for_key.name': "<hub.primary_key>", 'for_key.format': "<hub.primary_key_format>", 
+                                     'lfc_dts.name': 'effective_date', 'lfc_dts.format': 'DATE' },
+                        'satlink':  "todo" }
+                        
+    rx_keyword = re.compile(r'(<[^>]+>)')
+    # verify .. want any alphanumeric char or . as prefix/suffix
+    rx_kw_presuffix = re.compile(r'([\w\.]*<[^>]+>[\w\.]*)')
+    
+    
+    def init(self, name, yaml_defaults=None):
+        """For subclass to init and validate their state according to DV business rules. 
+        """
+        self.name = name
+        c_name = self.__class__.__name__
+        if yaml_defaults:
+            self.defaults = {k: yaml_defaults.get(k,v) for k,v in self.defaults_default[c_name].items()} 
+        else:
+            self.defaults = self.defaults_default[c_name]
+        self.validate_rules()
+        
+    def validate_rules(self):
+        raise NotImplementedError
+            
+    def setup_DDL(self, template):
+        """ Setting up DDL by ensuring all needed atts are set
+        """
+        # Let subclass setup all needed atts
+        self._setup_atts_for_DDL()
+        
+        ddl_list =  template.split("\n")
+        resolved_list = []
+        for i, line in enumerate(ddl_list):
+            new_lines = self.resolve_ddl_line(line)
+            if new_lines:
+                resolved_list += new_lines
+        self.DDL = "\n".join(resolved_list)
+                    
+    def _setup_atts_for_DDL(self):
+        raise NotImplementedError
+    
+        
+    def setup_DML(self, templates):
+        """ Setting up DML by ensuring all needed atts are set
+        """
+        # setup for DDL atts is a prerequisite.. A VOIR??
+        if not self.DDL:
+            self._setup_atts_for_DDL()
+        
+        # Let subclass setup all needed atts
+        self._setup_atts_for_DML()
+        
+        # Fillout the DML text from template step
+        self.DMLs = []
+        for step in templates:
+            step_list =  step.splitlines()
+            new_lines = []
+            for line in step_list:
+                replaced = self.resolve_dml_line(line)
+                new_lines.append(replaced)
+            self.DMLs.append("\n".join(new_lines))
+                
+        
+    def _setup_atts_for_DML(self):
+        raise NotImplementedError
+
+    
+    def resolve_ddl_line(self, ddl_line):
+        """
+        Transform ddl_line where each keywords (including pre/sufix, 'prefix<objs.prop>suffix') is resolved from self.
+        and return as list (or None if any keyword resolved to None) 
+        """
+        kw_items = self.rx_keyword.findall(ddl_line)
+        if len(kw_items) == 0:
+            return [ddl_line]
+
+        values_per_item = [self.resolve(k, scalar=False, mandatory=False) for k in kw_items]
+        # print('substitute kw {0} en= {1}'.format(str(kw_items), str(values_per_item)))
+        
+        max_nb_values = 0
+        for values in values_per_item:
+            if not values:
+                return None
+            if len(values) > max_nb_values:
+                max_nb_values = len(values)
+
+        new_lines = []
+        for no_line in range(max_nb_values):
+            new_line = ddl_line
+            for no_item in range(len(values_per_item)):
+                newvalue = values_per_item[no_item][no_line] if len(values_per_item[no_item]) > no_line else values_per_item[no_item][0]
+                new_line = new_line.replace(kw_items[no_item], newvalue)
+            new_lines.append(new_line)
+        return new_lines    
+    
+    
+    def resolve_dml_line(self, dml_line):
+        """
+        Transform dml_line by resolving each keywords and join results into a string using ", ".
+        """
+        kw_items = self.rx_kw_presuffix.findall(dml_line)
+        #print("voici ce que he trouve " + str(kw_items))
+        if len(kw_items) == 0:
+            return dml_line
+
+        values_per_item = [self.resolve(k, scalar=False, mandatory=False) for k in kw_items]
+        print('substitute kw {0} en= {1}'.format(str(kw_items), str(values_per_item)))
+        
+        new_line = dml_line
+        for no_item, values in enumerate(values_per_item):
+            if values:
+                new_line.replace(kw_items[no_item], ", ".join(values))
+            else:
+                # TODO handle the comma after None if present..
+                # i_after = text_line.find(kw_items[i]) + len(kw_items[i])
+                new_line.replace(kw_items[no_item], "")
+        return new_line
+        
+                            
+
+    def resolve(self, txt, txt_default=None, scalar=True, mandatory=True, list_join=", "):
+        """Transform txt (or txt_default if txt is None) after having resolved keyword
+        from self (ex '<name>_key' --> self.name + "_key"). 
+        If no keyword found in txt, simply return it (or txt_default).
+        """
+        val = txt if txt else txt_default
+        if not val:
+            raise Exception("Programming error both txt and txt_default are None")
+        elif val.find('<') == -1:
+            return val
+        prefix = val[:val.index('<')]
+        postfix = val[val.index('>')+1:]
+        keyword = val[val.index('<')+1:val.index('>')].strip()
+        
+        result = self.resolve_keyword(keyword, scalar, mandatory, list_join)
+        if scalar and result:
+            return prefix + result + postfix
+        elif not scalar and isinstance(result,list):
+            return [prefix + r + postfix for r in result]
+        # for now we simply return other type of result (ex. dic) as-is
+        return result
+        
+    def resolve_keyword(self, keyword, scalar, mandatory, list_join=", "):
+        """ Resolve keyword and returns result as string when scalar=True (using list_join if result is a list).
+        otherwise returns as list (transform as list if result is a string).
+        Raise exception when None is resolved and mandatory is True.
+        """
+        try:
+            result = self._resolve_keyword(keyword)
+        except (KeyError, AttributeError):
+            if mandatory:
+                raise DefinitionError(self, "Mandatory Keyword '{}' resolved to None".format(keyword))
+            else:
+                return None
+        
+        if scalar:
+            if isinstance(result, list):
+                result = list_join.join(result)
+            elif not isinstance(result, str):
+                raise Exception(self, "Keyword '{}' resolved to type '{}' (unsupported with scalar=True)".format(keyword, type(result)))
+        else:
+            if isinstance(result, str):
+                result = [result]
+        return result
+        
+        
+    def _resolve_keyword(self, keyword):
+        """Resolve keyword (¨<level1> or <level1.level2>) from self.
+        Raise eiher KeyError or AttributeError when no value resolvable.
+        """
+        kw = keyword.split(".")
+
+        if  len(kw) > 2:
+            raise DefinitionError(self, "Keyword '{0}' has more than two levels to resolve".format(keyword))
+        # no '.' 
+        elif len(kw) == 1:
+            result = getattr(self, keyword)
+        # one "."
+        else:
+            parent = getattr(self, kw[0])
+            if isinstance(parent, list):
+                if isinstance(parent[0], dict):
+                    assert all(isinstance(c, dict) for c in parent)
+                    result = [child[kw[1]] for child in parent]
+                else:
+                    result = [getattr(child, kw[1]) for child in parent]
+            elif isinstance(parent, dict):
+                result = parent[kw[1]]
+            else: 
+                result = getattr(parent, kw[1])
+        return result
+        
+            
     def __repr__(self):
         atts = ", ".join(["{0}={1}".format(k, repr(v)) for k, v in self.__dict__.items()])
         return "{0}({1})".format(self.__class__.__name__, atts)
@@ -81,251 +280,173 @@ class ModelBase(object):
         return self.__repr__()
 
         
-class Hub(ModelBase):
+class Hub(Table):
     creation_order = '1'
-
-    @property
-    def primary_key(self):
-        """Rules to determine Primary key (property allows referencing like: hub.primary_key"""
-        if self.sur_key:
-            return self.sur_key['name']
-        else:
-            return list(self.nat_keys.keys())[0]
-
-    def validate_model(self):
-        if not isinstance(self.nat_keys, list):
+              
+    def validate_rules(self):
+        if not isinstance( getattr(self, 'nat_keys', None), list):
             raise ModelRuleError(self, "Hub must have a 'nat_keys' list of at least one natural key")
-        if self.sur_key is None and len(self.nat_keys) > 1:
-            raise ModelRuleError(self, "Hub without 'sur_key' can only have one 'nat_keys' item (its Primary key)")
-
-
-class Link(ModelBase):
-    creation_order = '2'
+        if getattr(self, 'sur_key', None) is None and len(self.nat_keys) > 1:
+            raise ModelRuleError(self, "Hub without 'sur_key' must have only ONE 'nat_keys' (used as its PK")
             
-    def validate_model(self):
-        if not isinstance(self.hubs, list) or len(self.hubs) < 2:
-            raise ModelRuleError(self, "Link must have a 'hubs' list of at least two Hubs")
+    def _setup_atts_for_DDL(self):
+        if getattr(self, 'sur_key', None) is not None:
+            self.sur_key['name'] = self.resolve(self.sur_key.get('name'), txt_default=self.defaults['sur_key.name'])
+            self.sur_key['format'] = self.resolve(self.sur_key.get('format'), txt_default=self.defaults['sur_key.format'])            
+            self.primary_key = self.sur_key['name']
+            self.primary_key_format = self.sur_key['format']
+            self.unique_key = ", ".join([n['name'] for n in self.nat_keys])
+        else:
+            self.sur_key = None
+            self.primary_key = self.nat_keys[0]['name']
+            self.primary_key_format = self.nat_keys[0]['format']
+            self.unique_key = None
+
+    def _setup_atts_for_DML(self):        
+        src = self.resolve("s.<nat_keys.src>", scalar=False)
+        tgt = self.resolve("t.<nat_keys.name>", scalar=False)
+        self.keys_join = " and ".join( t[0] + " = " + t[1] for t in zip(src, tgt) )
+        
+        
+        
+            
+            
+class Link(Table):
+    creation_order = '2'
+
+    def validate_rules(self):
+        if not isinstance(getattr(self, 'hubs', None), list) or len(self.hubs) < 2:
+            raise ModelRuleError(self, "Link must refer to two or more Hubs")
         else:
             for h in self.hubs:
                 if not(isinstance(h, Hub)):
                     raise ModelRuleError(self, "Link can only refer to Hub type")
-            if self.for_keys and len(self.for_keys) != len(self.hubs):
+            if getattr(self, 'for_keys', None) is not None and len(self.for_keys) != len(self.hubs):
                 raise ModelRuleError(self, "Link's 'for_keys' mismatch the number of 'hubs'")
-                                                    
 
-class Sat(ModelBase):
+    def _setup_atts_for_DDL(self):
+        if getattr(self, 'sur_key', None) is None:
+            # sur_key is MANDATORY
+            self.sur_key = {}
+        self.sur_key['name'] = self.resolve(self.sur_key.get('name'), txt_default=self.defaults['sur_key.name'])
+        self.sur_key['format'] = self.resolve(self.sur_key.get('format'), txt_default=self.defaults['sur_key.format'])
+        
+        # there's a list of FK name in yaml
+        if getattr(self, 'for_keys', None) is not None:
+            # names explicitly listed (format derived from Hubs.PK)
+            self.unique_key = ", ".join(self.for_keys)
+            self.for_keys = [ dict(name=l, format=self.hubs[i].primary_key_format) for i, l in enumerate(self.for_keys)] 
+        else:
+            # NOT EXACTLY RIGHT, SINCE ONYL THE DEFAULT BEHAVIOR IS IMPLEMENTED HERE...!!
+            self.for_keys = [ dict(name=h.primary_key, format=h.primary_key_format) for h in self.hubs]
+            self.unique_key = ", ".join([h.primary_key for h in self.hubs])
+
+             
+class Sat(Table):
     creation_order = '3'
-    
-    def validate_model(self):
-        if self.hub is None:
-            raise ModelRuleError(self, "Satellite must refer to a single 'hub'")
+
+    def validate_rules(self):
+        if getattr(self, 'hub', None) is None:
+            raise ModelRuleError(self, "Satellite must refer to one 'hub'")
 #        if self.atts is None or len(self.atts) < 1:
 #            raise ModelRuleError(self, "Satellite must have at least one attribute listed under 'atts'")
 #        if self.lfc_dts is None:
 #            raise ModelRuleError(self, "Satellite must have one 'lfc_dts' attribute for lifecycle date/timestamp management")
 
-        
-class SatLink(ModelBase):
-    creation_order = '4'
+    def _setup_atts_for_DDL(self):       
+        if getattr(self, 'for_key', None) is None:
+            # for_key is MANDATORY
+            self.for_key = {}            
+        self.for_key['name'] = self.resolve(self.for_key.get('name'), txt_default=self.defaults['for_key.name'])
+        self.for_key['format'] = self.resolve(self.for_key.get('format'), txt_default=self.defaults['for_key.format'])
+
+        # lfc is NOT mandatory without any keyword <>
+        if getattr(self, 'lfc_dts', None) is not None:
+            l_name = self.lfc_dts.get('name', self.defaults['lfc_dts.name'])
+            l_fmt = self.lfc_dts.get('format', self.defaults['lfc_dts.format'])
+            self.lfc_dts = {'name': l_name, 'format': l_fmt}
+            self.primary_key =  "{}, {}".format(self.for_key['name'], self.lfc_dts['name'] )
+        else:
+            self.lfc_dts = None
+            self.primary_key =  self.for_key['name']
+
     
-    def validate_model(self):
+# TODO by inhereting from Sat!
+class SatLink(Table):
+    creation_order = '4'
+    defaults =  {"for_key.name": "<link.sur_key>", "lfc_dts": "effective_date" }
+    
+    def validate_rules(self):
         if self.link is None:
             raise ModelRuleError(self, "Sat-Link must refer to a single 'link'")
-#        if self.atts is None or len(self.atts) < 1:
-#            raise ModelRuleError(self, "Sat-Link must have at least one attribute listed under 'atts'")
-#        if self.lfc_dts is None:
-#            raise ModelRuleError(self, "Sat-Link must have one 'lfc_dts' attribute for lifecycle date/timestamp management")
 
-yaml = ruamel.yaml.YAML()
-yaml.register_class(DVModel)
-yaml.register_class(Hub)
-yaml.register_class(Sat)
-yaml.register_class(Link)
-yaml.register_class(SatLink)
 
-# yaml_tag approach does work for default optional param
-# https://stackoverflow.com/questions/7224033/default-constructor-parameters-in-pyyaml
-# so revert to using own constructor impl
 
-# Generators assume objects satisfy model-rule (validate_model() called prior and raised no Exceptions)
-
-class DDLGenerator(object):
-    # used in conjunction with defaults found in template which have precendence over next values
-    default_default = { 'hub':      {'sur_key.name': "<name>_key", 'sur_key.format': "NUMBER(9)"},
-                        'link':     {'sur_key.name': "<name>_key", 'for_keys.name': "<hubs.primary_key>"},
-                        'sat':      {'for_key.name': "<hub.primary_key>", 'lfc_dts': "effective_date"},
-                        'satlink':  {'for_key.name': "<link.sur_key>", 'lfc_dts': "effective_date"} }
     
-    # ddl_template is a dict read off from yaml file (either inside model or separate file defined by user)
-    def __init__(self, dv_model, ddl_template):
-        self.dv_model = dv_model
-        self.ddl_template = dict(ddl_template)
-        self.defaults = dict(ddl_template.get('defaults'))
-    
-    def ddl_template(self, dv_obj):
-        # custom template 
-        if dv_obj.ddl_custom:
-            template = self.ddl_template[dv_obj.ddl_custom]
-        else:
-            template = self.ddl_template[dv_obj.__class__.__name__]
-        if template is None:
-            raise DefinitionError(dv_obj, "DDL template '{0}' definition not found".format(template))
-        return template
-                          
-    def ddl(self):
-        for name, dv_obj in self.dv_model.tables:
-            ddl_obj = DDLObject(dv_obj, self.ddl_template(dv_obj), self.defaults[dv_obj.__class__.__name__])
-            yield ddl_obj.ddl()
-        
-        
-class DDLObject(object):
-    regex_bracket = re.compile(r'(<[^>]+>)') 
-    # special "comma case" ('<***,>')  where text is combined on same line
-    regex_comma = re.compile(r'(<[^>]+,>)')    
-           
-    def __init__(self, dv_obj, template, default_keywords):
-        self.dv_obj
-        self.template = template
-        self.default_keywords = default_keywords
-        
-    def substitute_text(self, text):
-        """Generate a number of new text where all <objs.prop> found are resolved. The number of text
-        generated depends on the number of elements returned while resolving.
-        """
-        keywords = self.regex_bracket.findall(text)
-        values_per_keyword = [ [v for v in resolve_with_default(self.dv_obj,kw,self.default_keywords)] for kw in keywords]
-        
-        for no_line in range(values_per_keyword[0]):
-            txt_line = text
-            for i, kw in enumerate(keywords):
-                try:
-                    value = values_per_keyword[i][no_line]
-                except IndexError as er:
-                    raise DefinitionError(self.dv_obj, "Incompatible number of values resolved by '{}'".format(keywords[i]))
-                txt_line = txt_line.replace(kw, value)
-            yield txt_line
 
-    def ddl(self):
-        ddl = self.template
-        # 1st process "comma case" 
-        for match in self.regex_comma.findall(self.template):
-            #programming check
-            match.index(',>')
-            kw = match.replace(',>','>')
-            ddl = ddl.replace(match, ", ".join(resolve_with_default(self.dv_obj, kw, self.default_keywords)))
 
-        # 2nd process normal multi-line case 
-        ddl_list = ddl.split("\n")
-        for i, line in enumerate(ddl_list):
-            if self.regex_bracket.search(line):
-                ddl_list[i:i+1] = self.substitute_text(line)
-        return "\n".join(ddl_list)
-                    
-
-def resolve_with_default(dv_obj, keyword, default_keywords):
-    """ Return values resolved by dv_obj, and when None resolve using the default_keyword found
-    Argument keyword is with bracket!!
-    """
-    keyword = keyword[keyword.index('<')+1:keyword.index('>')].strip()
-    value = resolve(dv_obj, keyword)
-    if value is None or (len(value) == 1 and value[0] is None):
-        default_kw = default_keywords.get(keyword)
-        if default_kw is None:
-            raise DefinitionError(dv_obj, "No default found for '{}'".format(keyword))
-        if DDLObject.regex_bracket.search(default_kw) is None:
-            return default_kw
-        value = resolve(dv_obj, default_kw[default_kw.index('<')+1:default_kw.index('>')].strip())
-        if value is None:
-            raise DefinitionError(dv_obj, "Default keyword '{}' not resolvable".format(default_kw.strip()))
-    return value
-    
+DV_MODEL = None
+def init_dv_model(yaml_model_file):
+    global DV_MODEL
+    if not DV_MODEL:
+        yaml = ruamel.yaml.YAML()
+        yaml.register_class(DVModel)
+        yaml.register_class(Hub)
+        yaml.register_class(Sat)
+        yaml.register_class(Link)
+        yaml.register_class(SatLink)       
+        
+        with open(yaml_model_file) as yf:
+            DV_MODEL = yaml.load(yf)
+        DV_MODEL.init_model()
                 
-def resolve(dv_obj, keyword):
-    """Return values resolved by dv_obj using the keyword as an attribute.  Argumemt keyword without bracket.
-    """
-    kw = keyword.split(".")
-    if  len(kw) > 2:
-        raise DefinitionError(dv_obj, "Resolving attribute '{0}' more than 1 level not supported".format(keyword))
-    # no '.' 
-    elif len(kw) == 1:
-        value = [getattr(dv_obj, keyword)]
-    # one "."     
-    else:
-        parent = getattr(dv_obj, kw[0])
-        if parent is None:
-             return None
-        elif isinstance(parent, list):
-            value = [getattr(child, kw[1]) for child in parent]
-        else:
-            value = [getattr(parent, kw[1])]      
-    return value
-
-
-  
     
-class DMLGenerator(object):
-    def __init__(self, obj):
-        self.obj = obj
-        
-    def get_source(self):
-        if self.obj.src is None:
-            pass
-            # raise SourceMappingError(self.obj, "'src' attribute required to generate DML".format())
-        return self.obj.src
-        
-    def validate_sourcing(self):
-        raise NotImplementedError
-        
-    def dml(self):
-        raise NotImplementedError
+# dict with DDL and DML {'DDL_Hub': 'ddl', .., 'DML_Sat': ['step1', 'step2',..]) 
+template_SQL = None
+def get_template_SQL():
+    global template_SQL
+    if template_SQL:
+        return template_SQL
+    
+    module_path = os.path.dirname(__file__)
+    # Template located at the ROOT of Project
+    template = os.path.join(module_path, os.pardir, "Template_SQL.sql")
+    try:       
+        with open(template) as tf:
+            content = "".join(tf.readlines())
+    except NotADirectoryError:
+        raise Exception("Could not find Template SQL '{}'".format(template))
+
+    content_dic = {}
+    regex = re.compile(r'(--(DDL|DML)_[^:]+:)', re.MULTILINE)
+    for exp, _ in regex.findall(content):
+        ibegin = content.index(exp) + len(exp) + 1
+        iend = content.index(';',ibegin) + 1
+        if exp.find('DDL') != -1:
+            key = exp[exp.index('--')+2:exp.index(':')]
+            content_dic[key] = content[ibegin:iend]
+        elif exp.find('DML') != -1:
+            key = exp[exp.index('--')+2:exp.index('(')]
+            content_dic.setdefault(key, []).append(content[ibegin:iend])
+    return content_dic
+
+
+def get_args():
+    parser = argparse.ArgumentParser(description="Utility for Data Vault code generation")
+    parser.add_argument("-y", "--yaml", help="YAML file defining model and configuration")
+    parser.add_argument("output", help="Output type: refresh_ddl, refresh_dml or chrono")
+    return parser.parse_args()
+    
+    
+def main():
+    # args = get_args()
+    init_dv_model("./Ex_model.yaml")
+    DV_MODEL.setup_DDL(get_template_SQL())
+    print(list(DV_MODEL.generate_ddl()))
     
 
-class DMLGeneratorHub(DMLGenerator):
-        
-    def validate_sourcing(self):        
-        self.get_source()
-        #Hub validate_model() has enforced the presence of nat_keys
-        for v in self.obj.nat_keys.values():
-            if v.get('src') is None:
-                pass
-                # raise SourceMappingError(self.obj, "'src' attribute required for every 'nat_keys'")
-        if self.obj.sur_key and self.obj.sur_key.get('src') is None:
-            pass
-            # raise SourceMappingError(self.obj, "'sur_key' also required 'src' attribute for mapping (ex. a sequence: seq.nextval())")
-        # etc...
 
-        
-        
-
-class DMLGeneratorLink(DMLGenerator):
-
-    def validate_sourcing(self):
-        if self.obj.sur_key.get('src') is None:
-            raise SourceMappingError(self.obj, "'src' attribute required for 'sur_key' (ex. a sequence: seq.nextval())")
-        # Using default sourcing from hub
-        if self.obj.src is None:
-            hub_src = set()
-            for h in self.obj.hubs:
-                hub_gen = DMLGeneratorHub(h)
-                try:
-                    hub_gen.validate_sourcing() 
-                except SourceMappingError as e:
-                    raise SourceMappingError(self.obj, "Link sourcing inherited from Hub requires valid Hub sourcing")
-                hub_src.add(h.src)
-            if len(hub_src) > 1:
-                raise SourceMappingError(self.obj, "Link sourcing inherited from Hub, requires same source for all Hub")
-
-            
-class DMLGeneratorSat(DMLGenerator):
-        
-    def __init__(self, obj):
-        super().__init__(self, obj)
-        # todo...
-                
-            
-class DMLGeneratorSatLink(DMLGenerator):
-        
-    def __init__(self, obj):
-        super().__init__(self, obj)
-        # todo...
-                
+if __name__ == '__main__':
+    main()
+    
+    
