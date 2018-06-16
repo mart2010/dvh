@@ -89,15 +89,15 @@ dvmodel_txt = """
        defaults:
             Hub: {sur_key.format: "DUMMY_F"}
        tables: 
-            h_surkey_nats: &h_surkey_nats !Hub
+            h_surkey_nats: !Hub &h_surkey_nats 
                 sur_key: {}
                 nat_keys:
-                    - {name: h11_id, format: number(3)}
-                    - {name: h12_id, format: char(10)} 
+                    - {name: h11_id, format: number(3), src: h1_src}
+                    - {name: h12_id, format: char(10), src: h12_src} 
                     
             h_no_surkey_one_nat: &h_no_surkey_one_nat !Hub
                 nat_keys:
-                    - {name: h2_id, format: number(9)}
+                    - {name: h2_id, format: number(9), src: h2_src}
 
             l_no: !Link
                 hubs: [*h_surkey_nats, *h_no_surkey_one_nat]

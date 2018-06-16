@@ -22,7 +22,7 @@ class DefinitionError(BaseError): pass
 
 
 class DVModel(object):
-    """Represent a complete DataVault model as defined in one YAML document
+    """Represent a complete DataVault model defined inside a YAML document
     """
     def init_model(self):
         error = False
@@ -49,7 +49,7 @@ class DVModel(object):
             if sql_type == "DDL":
                 table_obj.setup_DDL(template=tmpl)
             elif sql_type == "DML":
-                table_obj.setup_DML(template=tmpl)
+                table_obj.setup_DML(templates=tmpl)
                   
     
     def generate_ddl_stmts(self, with_sequence=True):
@@ -65,6 +65,13 @@ class DVModel(object):
 
     def generate_ddl_grants(self, to_schema):
         pass
+    
+
+class PRESModel(object):
+    """Represent a presentation model defined inside a YAML document
+    """
+    # TODO: this could be used to define View DDL !!!
+    pass
     
     
         
@@ -125,7 +132,7 @@ class Table(object):
         """ Setting up DML by ensuring all needed atts are set
         """
         # setup for DDL atts is a prerequisite.. A VOIR??
-        if not self.DDL:
+        if getattr(self, "DDL", None) is None:
             self._setup_atts_for_DDL()
         
         # Let subclass setup all needed atts
@@ -303,13 +310,11 @@ class Hub(Table):
             self.unique_key = None
 
     def _setup_atts_for_DML(self):        
-        src = self.resolve("s.<nat_keys.src>", scalar=False)
-        tgt = self.resolve("t.<nat_keys.name>", scalar=False)
+        src = self.resolve("s.<nat_keys.src>", scalar=False, mandatory=True)
+        tgt = self.resolve("t.<nat_keys.name>", scalar=False, mandatory=True)
         self.keys_join = " and ".join( t[0] + " = " + t[1] for t in zip(src, tgt) )
         
-        
-        
-            
+
             
 class Link(Table):
     creation_order = '2'
@@ -341,6 +346,10 @@ class Link(Table):
             self.for_keys = [ dict(name=h.primary_key, format=h.primary_key_format) for h in self.hubs]
             self.unique_key = ", ".join([h.primary_key for h in self.hubs])
 
+        def _setup_atts_for_DML(self):
+                        
+            
+            
              
 class Sat(Table):
     creation_order = '3'

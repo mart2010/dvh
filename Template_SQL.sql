@@ -1,7 +1,6 @@
-/* Template used to generate the DDL/DML.  By default, DDL/DML statement is selected  
- * based on the object type using special tag.  
+/* Templates used to generate DDL/DML.  By default, statement is selected from the object type.  
  * Alternatively, any object in yaml can use a custom DDL/DML with: "--[DDL|DML]_Type-custom:"
- * where custom must match a stmt in this template.  
+ * where custom must match a name in this template (ex. DML_Hub-withdupes(1)).  
  *
  */
 
@@ -84,7 +83,7 @@ when not matched then insert(<sur_key.name>, <nat_keys.name>, <lfc.name>, last_s
 values (<sur_key.seq>, <nat_keys.src>, <lfc_dts.src>, <lfc_dts.src>, -111111, <rec_src>)
 ;
 
---DML_Hub_withdupes(1):
+--DML_Hub-withdupes(1):
 merge into <name>_h t using 
     (select <nat_keys.src>, min(<lfc.src>) as <lfc.src>, min(<rec_src>) as <rec_src>
      from {src}

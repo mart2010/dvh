@@ -4,7 +4,9 @@
             Hub:  {sur_key.name: <name>_key, sur_key.format: number(9), sur_key.seq = <name>_seq}
             Link: {sur_key.name: <name>_key, sur_key.format: number(9), sur_key.seq = <name>_seq, for_keys.name = <hubs.primary_key>, for_keys.format = <hubs.primary_key_format>}
             Sat:  {for_key.name: <hub.primary_key>, for_key.format: <hub.primary_key_format>, lfc.name: effective_date, lfc.exp: expiration_date, lfc.format: date}
-            
+                
+        globals:
+            target_schema: my_schema  
             
        tables: 
             rcent_organisation: !Hub &rcent_organisation 
@@ -17,7 +19,7 @@
                     - {name: loc_cantid, format: number(9), src: cantonalid_loc}
                 src: hubref_dsa.dsa_rcent_loc
 
-            rcent_org_loc: &rcent_org_loc !Link
+            rcent_org_loc: !Link &rcent_org_loc 
                 hubs: [*rcent_organisation, *rcent_location]
                 src: hubref_dsa.dsa_rcent_loc
                 
