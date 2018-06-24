@@ -6,17 +6,22 @@ from itertools import zip_longest
 import argparse
 
 
+####################################################################################################################
+# aspect model à conserver ici
+####################################################################################################################
+
+
 class BaseError(Exception):
     def __init__(self, obj, msg):
         self.obj = obj
         self.msg = msg
 
     def __str__(self):
-        return "Error for object {0}:\t{1}".format(self.obj, self.msg)
+        return "Error for object {0}: {1}".format(self.obj, self.msg)
 
 
 #For Domain/Model rules violation raised from function: Table.validate_rules()
-class ModelRuleError(BaseError):pass
+class ModelRuleError(BaseError): pass
 #Yaml-related causing yaml.load to fail, will raise DefinitionError by model reader...
 class DefinitionError(BaseError): pass
 
@@ -76,20 +81,23 @@ class PRESModel(object):
     
         
 class Table(object):
-    """Superclass for all table-type in a DV model. Subclass's roles are to enforce/validate model rules 
-    and to provide attribute values for DDL & DML generation.   They go through different states:
-        - State0: Instanciation from yaml doc (only attributes present in doc exist at this point) 
-        - State1: Initialized and Business rules validated; init() method 
-        - State2: All atts mandatory set and DDL constructed from template;  setup_DDL() 
+    """Superclass for all table-type in a DV model. Subclass must enforce/validate model rules 
+    and setup attributes for DDL & DML generation, while going through these states:
+        - State0: Instanciation from yaml doc (only attributes defined in yaml exist at this point) 
+        - State1: Initializion and model rules validation (init() method executed)
+        - State2: Atts for DDL construct are ready (setup_DDL() executed)
+        - State3: Atts for DML construct are ready (setup_DML() executed)
         - ...
     """
-    # default's defaults (for cases where no default is set in yaml model)
-    defaults_default= { 'Hub':      {'sur_key.name': "<name>_key", 'sur_key.format': "number(9)"},
-                        'Link':     {'sur_key.name': "<name>_key", 'sur_key.format': "number(9)", 
-                                     'for_keys.name': "<hubs.primary_key>", 'for_keys.format': "<hubs.primary_key_format>"},
-                        'Sat':      {'for_key.name': "<hub.primary_key>", 'for_key.format': "<hub.primary_key_format>", 
-                                     'lfc_dts.name': 'effective_date', 'lfc_dts.format': 'DATE' },
-                        'satlink':  "todo" }
+    # default's defaults (applied when no default found in yaml model)
+    defaults_default = \
+        { 'Hub':  {'sur_key': dict(name="<name>_key", format="number(9)", seq="<name>_seq")},
+          'Link': {'sur_key': dict(name="<name>_key", format= "number(9)", seq="<name>_seq"),
+                   'for_keys': dict(name="<hubs.primary_key.name>", src="<hubs.nat_key.src>")},
+          'Sat':  {'for_key': dict(name="<hub.primary_key.name>", src="<hub.nat_key.src>"), 
+                   'lfc': dict(name="effective_date", exp="expiration_date", format= "date")},
+          'Satlink':  "todo" 
+         }
                         
     rx_keyword = re.compile(r'(<[^>]+>)')
     # verify .. want any alphanumeric char or . as prefix/suffix
@@ -100,36 +108,36 @@ class Table(object):
         """For subclass to init and validate their state according to DV business rules. 
         """
         self.name = name
-        c_name = self.__class__.__name__
+        self.table_type = self.__class__.__name__
         if yaml_defaults:
-            self.defaults = {k: yaml_defaults.get(k,v) for k,v in self.defaults_default[c_name].items()} 
+            self.defaults = {k: yaml_defaults.get(k,v) for k,v in self.defaults_default[self.table_type].items()} 
         else:
-            self.defaults = self.defaults_default[c_name]
+            self.defaults = self.defaults_default[self.table_type]
         self.validate_rules()
         
     def validate_rules(self):
         raise NotImplementedError
             
     def setup_DDL(self, template):
-        """ Setting up DDL by ensuring all needed atts are set
+        """ Setting up DDL prerequisite with mandatory/default atts
         """
         # Let subclass setup all needed atts
         self._setup_atts_for_DDL()
         
-        ddl_list =  template.split("\n")
-        resolved_list = []
-        for i, line in enumerate(ddl_list):
-            new_lines = self.resolve_ddl_line(line)
-            if new_lines:
-                resolved_list += new_lines
-        self.DDL = "\n".join(resolved_list)
+#        ddl_list =  template.split("\n")
+#        resolved_list = []
+#        for i, line in enumerate(ddl_list):
+#            new_lines = self.resolve_ddl_line(line)
+#            if new_lines:
+#                resolved_list += new_lines
+#        self.DDL = "\n".join(resolved_list)
                     
     def _setup_atts_for_DDL(self):
         raise NotImplementedError
     
-        
     def setup_DML(self, templates):
-        """ Setting up DML by ensuring all needed atts are set
+        """ Setting up DML by prerequisite with mandatory/default atts
+        TO MERGE WITH setup_DDL...
         """
         # setup for DDL atts is a prerequisite.. A VOIR??
         if getattr(self, "DDL", None) is None:
@@ -204,80 +212,77 @@ class Table(object):
                 new_line.replace(kw_items[no_item], "")
         return new_line
         
-                            
 
-    def resolve(self, txt, txt_default=None, scalar=True, mandatory=True, list_join=", "):
-        """Transform txt (or txt_default if txt is None) after having resolved keyword
-        from self (ex '<name>_key' --> self.name + "_key"). 
-        If no keyword found in txt, simply return it (or txt_default).
+    def fillout_att_dict(self, att_dict, default_dict):
+        """Complete att_dict by setting any missing value to default resolution. PAS CERTAIN DOIT GARDER: When resolution is a list 
+        of one element, set value as this element instead of the list"""
+        for k, v in default_dict.items():
+            if att_dict.get(k) is None:    
+                def_value = self.resolve_text(txt=v, join_with=None)
+                if len(def_value) == 1:
+                    att_dict[k] = def_value[0]
+                else:
+                    att_dict[k] = def_value
+                     
+
+    def resolve_text(self, txt, join_with=None):
+        """Extract keyword from txt and resolve it from self (ex '<name>_key' --> self.name + "_key").
+        If no keyword found in txt, simply return it. Use join_with to join list element to return string.
         """
-        val = txt if txt else txt_default
-        if not val:
-            raise Exception("Programming error both txt and txt_default are None")
-        elif val.find('<') == -1:
-            return val
-        prefix = val[:val.index('<')]
-        postfix = val[val.index('>')+1:]
-        keyword = val[val.index('<')+1:val.index('>')].strip()
+        if isinstance(txt,list) or txt.find('<') == -1:
+            return txt
+        idx_1 = txt.index('<')
+        idx_2 = txt.index('>')
+        prefix = txt[:idx_1]
+        postfix = txt[idx_2+1:]
+        keyword = txt[idx_1+1:idx_2].strip()
         
-        result = self.resolve_keyword(keyword, scalar, mandatory, list_join)
-        if scalar and result:
-            return prefix + result + postfix
-        elif not scalar and isinstance(result,list):
-            return [prefix + r + postfix for r in result]
-        # for now we simply return other type of result (ex. dic) as-is
-        return result
+        res = self.resolve_keyword(keyword, mandatory=True)
+        res_prepost = [prefix + r + postfix for r in res]
         
-    def resolve_keyword(self, keyword, scalar, mandatory, list_join=", "):
-        """ Resolve keyword and returns result as string when scalar=True (using list_join if result is a list).
-        otherwise returns as list (transform as list if result is a string).
-        Raise exception when None is resolved and mandatory is True.
-        """
+        if join_with:
+            return join_with.join(res_prepost)
+        else:
+            return res_prepost
+        
+    def resolve_keyword(self, keyword, mandatory, alt_obj=None):
+        """Resolve keyword from self and return result as a list. 
+        If impossible to resolve return None or Raise error when mandatory=True"""
         try:
-            result = self._resolve_keyword(keyword)
+            if alt_obj:
+                result = list(self._resolve_recursive(obj=alt_obj, keyword=keyword))
+            else:
+                result = list(self._resolve_recursive(obj=self, keyword=keyword))
         except (KeyError, AttributeError):
             if mandatory:
                 raise DefinitionError(self, "Mandatory Keyword '{}' resolved to None".format(keyword))
             else:
-                return None
-        
-        if scalar:
-            if isinstance(result, list):
-                result = list_join.join(result)
-            elif not isinstance(result, str):
-                raise Exception(self, "Keyword '{}' resolved to type '{}' (unsupported with scalar=True)".format(keyword, type(result)))
-        else:
-            if isinstance(result, str):
-                result = [result]
+                result = None
         return result
-        
-        
-    def _resolve_keyword(self, keyword):
-        """Resolve keyword (¨<level1> or <level1.level2>) from self.
-        Raise eiher KeyError or AttributeError when no value resolvable.
-        """
-        kw = keyword.split(".")
 
-        if  len(kw) > 2:
-            raise DefinitionError(self, "Keyword '{0}' has more than two levels to resolve".format(keyword))
-        # no '.' 
-        elif len(kw) == 1:
-            result = getattr(self, keyword)
-        # one "."
+    def _resolve_recursive(self, obj, keyword):
+        """Resolve keyword from object (obj.keyword1.keyword2..keywordn) to get value(s) of keywordn. 
+        Raise KeyError or AttributeError when None is found at any level."""
+        kw = keyword.split(".")
+        # recursive STOP condition
+        if len(kw) == 1:
+            if isinstance(obj, dict):
+                yield obj[keyword]
+            elif isinstance(obj, list):
+                for o in obj: yield o
+            else:
+                yield getattr(obj, keyword)
         else:
-            parent = getattr(self, kw[0])
-            if isinstance(parent, list):
-                if isinstance(parent[0], dict):
-                    assert all(isinstance(c, dict) for c in parent)
-                    result = [child[kw[1]] for child in parent]
-                else:
-                    result = [getattr(child, kw[1]) for child in parent]
-            elif isinstance(parent, dict):
-                result = parent[kw[1]]
-            else: 
-                result = getattr(parent, kw[1])
-        return result
-        
+            child = getattr(obj, kw[0])
+            remaining_kw = ".".join(kw[1:])
+            # TODO: list of list does not work properly in that case... (ex. hubs.nat_key.src) as the list are exploded.. see how to fix
+            if isinstance(child, list):
+                for c in child: yield from self._resolve_recursive(c, remaining_kw)
+            elif isinstance(child, dict) or hasattr(child, '_resolve_recursive'):
+                yield from self._resolve_recursive(child, remaining_kw)
+            else:
+                raise Exception("Recusrive programming error: obj:'{}', child:'{}', kw:'{}'".format(obj, child, keyword))
+                        
             
     def __repr__(self):
         atts = ", ".join(["{0}={1}".format(k, repr(v)) for k, v in self.__dict__.items()])
@@ -291,27 +296,24 @@ class Hub(Table):
     creation_order = '1'
               
     def validate_rules(self):
-        if not isinstance( getattr(self, 'nat_keys', None), list):
-            raise ModelRuleError(self, "Hub must have a 'nat_keys' list of at least one natural key")
-        if getattr(self, 'sur_key', None) is None and len(self.nat_keys) > 1:
-            raise ModelRuleError(self, "Hub without 'sur_key' must have only ONE 'nat_keys' (used as its PK")
+        if not isinstance( getattr(self, 'nat_key', None), list):
+            raise ModelRuleError(self, "Hub must have a 'nat_key' list of at least one natural key")
+        if getattr(self, 'sur_key', None) is None and len(self.nat_key) > 1:
+            raise ModelRuleError(self, "Hub without 'sur_key' must have only ONE 'nat_key' (used as its PK")
             
     def _setup_atts_for_DDL(self):
         if getattr(self, 'sur_key', None) is not None:
-            self.sur_key['name'] = self.resolve(self.sur_key.get('name'), txt_default=self.defaults['sur_key.name'])
-            self.sur_key['format'] = self.resolve(self.sur_key.get('format'), txt_default=self.defaults['sur_key.format'])            
-            self.primary_key = self.sur_key['name']
-            self.primary_key_format = self.sur_key['format']
-            self.unique_key = ", ".join([n['name'] for n in self.nat_keys])
+            self.fillout_att_dict(self.sur_key, self.defaults['sur_key'])
+            self.primary_key = {'name': self.sur_key['name'], 'format': self.sur_key['format']}
+            self.unique_key = ", ".join([n['name'] for n in self.nat_key])
         else:
             self.sur_key = None
-            self.primary_key = self.nat_keys[0]['name']
-            self.primary_key_format = self.nat_keys[0]['format']
+            self.primary_key = {'name': self.nat_key[0]['name'], 'format': self.nat_key[0]['format']}
             self.unique_key = None
 
     def _setup_atts_for_DML(self):        
-        src = self.resolve("s.<nat_keys.src>", scalar=False, mandatory=True)
-        tgt = self.resolve("t.<nat_keys.name>", scalar=False, mandatory=True)
+        src = self.resolve("s.<nat_key.src>", scalar=False, mandatory=True)
+        tgt = self.resolve("t.<nat_key.name>", scalar=False, mandatory=True)
         self.keys_join = " and ".join( t[0] + " = " + t[1] for t in zip(src, tgt) )
         
 
@@ -333,21 +335,37 @@ class Link(Table):
         if getattr(self, 'sur_key', None) is None:
             # sur_key is MANDATORY
             self.sur_key = {}
-        self.sur_key['name'] = self.resolve(self.sur_key.get('name'), txt_default=self.defaults['sur_key.name'])
-        self.sur_key['format'] = self.resolve(self.sur_key.get('format'), txt_default=self.defaults['sur_key.format'])
+        self.fillout_att_dict(self.sur_key, self.defaults['sur_key'])
         
-        # there's a list of FK name in yaml
-        if getattr(self, 'for_keys', None) is not None:
-            # names explicitly listed (format derived from Hubs.PK)
-            self.unique_key = ", ".join(self.for_keys)
-            self.for_keys = [ dict(name=l, format=self.hubs[i].primary_key_format) for i, l in enumerate(self.for_keys)] 
-        else:
-            # NOT EXACTLY RIGHT, SINCE ONYL THE DEFAULT BEHAVIOR IS IMPLEMENTED HERE...!!
-            self.for_keys = [ dict(name=h.primary_key, format=h.primary_key_format) for h in self.hubs]
-            self.unique_key = ", ".join([h.primary_key for h in self.hubs])
+        # there's no list of FK name in yaml
+        if getattr(self, 'for_keys', None) is None:
+            self.for_keys = [{}] * len(self.hubs)
+        
+        
+        d_fmts = self.resolve_keyword('hubs.primary_key.format', mandatory=True)
+        # workaround as list of list not yet suported in my resolve_recursive()...
+        d_srcs = []
+        for h in self.hubs:
+            d_srcs.append(self.resolve_keyword('nat_key.src', mandatory=True, alt_obj=h))
+        d_names = self.resolve_keyword('hubs.primary_key.name', mandatory=True)
+        def_dict = [dict(name=d_names[i], src=d_srcs[i], format=d_fmts[i]) for i in range(len(self.hubs)) ]  
+        
+        for i, k in enumerate(self.for_keys):
+            self.fillout_att_dict(k, def_dict[i])
+        self.unique_key = ", ".join([v['name'] for v in self.for_keys])
 
-        def _setup_atts_for_DML(self):
-                        
+    def _setup_atts_for_DML(self):
+        if getattr(self, 'nat_keys_src', None) is not None:
+            hubs_natkey_src =  [ self.src + "." + n for h in self.nat_keys_src for n in h] 
+        else:    
+            hubs_natkey_src = [ self.src + "." + n['src'] for h in self.hubs for n in h.nat_key] 
+        hubs_natkey_tgt = [ h.name + "." + n['name'] for h in self.hubs for n in h.nat_key] 
+        self.nat_keys_join = " and ".join([t[0] + " = " + t[1] for t in zip(hubs_natkey_src, hubs_natkey_tgt)])
+        
+        for_keys_tgt = self.resolve("t.<for_keys.name>", scalar=False, mandatory=True)
+        # resolve only goes 2-level deep...
+        for_keys_src = ["s." + h.primary_key['name'] for h in self.hubs]
+        self.keys_join = " and ".join([ t[0] + " = " + t[1] for t in zip(for_keys_tgt, for_keys_src)])
             
             
              
@@ -357,27 +375,20 @@ class Sat(Table):
     def validate_rules(self):
         if getattr(self, 'hub', None) is None:
             raise ModelRuleError(self, "Satellite must refer to one 'hub'")
-#        if self.atts is None or len(self.atts) < 1:
-#            raise ModelRuleError(self, "Satellite must have at least one attribute listed under 'atts'")
-#        if self.lfc_dts is None:
-#            raise ModelRuleError(self, "Satellite must have one 'lfc_dts' attribute for lifecycle date/timestamp management")
 
     def _setup_atts_for_DDL(self):       
         if getattr(self, 'for_key', None) is None:
             # for_key is MANDATORY
-            self.for_key = {}            
-        self.for_key['name'] = self.resolve(self.for_key.get('name'), txt_default=self.defaults['for_key.name'])
-        self.for_key['format'] = self.resolve(self.for_key.get('format'), txt_default=self.defaults['for_key.format'])
+            self.for_key = {}
+        self.fillout_att_dict(self.for_key, self.defaults['for_key'])
 
-        # lfc is NOT mandatory without any keyword <>
-        if getattr(self, 'lfc_dts', None) is not None:
-            l_name = self.lfc_dts.get('name', self.defaults['lfc_dts.name'])
-            l_fmt = self.lfc_dts.get('format', self.defaults['lfc_dts.format'])
-            self.lfc_dts = {'name': l_name, 'format': l_fmt}
-            self.primary_key =  "{}, {}".format(self.for_key['name'], self.lfc_dts['name'] )
-        else:
-            self.lfc_dts = None
+        # lfc is not MANDATORY
+        if getattr(self, 'lfc', None) is None:
             self.primary_key =  self.for_key['name']
+        else:
+            self.fillout_att_dict(self.lfc, self.defaults['lfc'])
+            self.primary_key =  "{}, {}".format(self.for_key['name'], self.lfc['name'] )
+            
 
     
 # TODO by inhereting from Sat!
@@ -392,6 +403,9 @@ class SatLink(Table):
 
 
     
+####################################################################################################################
+# aspect logistic à mettre dans un autre module
+####################################################################################################################
 
 
 DV_MODEL = None

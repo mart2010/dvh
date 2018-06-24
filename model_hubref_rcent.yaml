@@ -1,14 +1,9 @@
 !DVModel
-       -- these are the default's default (only need to keep the ones where these default's value are changed)
-       defaults:
-            Hub:  {sur_key.name: <name>_key, sur_key.format: number(9), sur_key.seq = <name>_seq}
-            Link: {sur_key.name: <name>_key, sur_key.format: number(9), sur_key.seq = <name>_seq, for_keys.name = <hubs.primary_key>, for_keys.format = <hubs.primary_key_format>}
-            Sat:  {for_key.name: <hub.primary_key>, for_key.format: <hub.primary_key_format>, lfc.name: effective_date, lfc.exp: expiration_date, lfc.format: date}
                 
         globals:
             target_schema: my_schema  
             
-       tables: 
+        tables: 
             rcent_organisation: !Hub &rcent_organisation 
                 nat_keys:
                     - {name: org_cantid, format: number(9), src: cantonalid_org}

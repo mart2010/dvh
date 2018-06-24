@@ -1,0 +1,54 @@
+!Documentation
+         #  In a yaml model, we set different type of attrubtes,:
+         #          - Mandatory user-entered attributes without defaults 
+         #          - Optional user-entered attributes without defaults
+         #          - Default customizable attributes either mandatory or optional )         
+         #          - Hardcoded values implemented in program logic that cannot be customized
+        tables:
+            Hub:   
+                -- Mandatory 
+                    nat_key:
+                        - {name: myname, format: myfmt, src: mysrc}
+                    src:  mysrc
+                -- Optional  
+                    extras: 
+                        - {name: myname, format: myfmt, src: mysrc}
+                -- Defaults customizable (sur_key is optional, if needed need at least to set an empty dict{})
+                    sur_key: {name: <name>_key, format: number(9), seq: <name>_seq}
+                -- Hardcoded
+                    primary_key: {name: derived_from_code, format: derived}
+                    unique_key: derived_from_code
+                    keys_join: derived_from_code
+                  
+            Link:  
+                -- Mandatory
+                    hubs: [ mylistofhubs, ..]
+                    src: mysrc
+                -- Optional 
+                    extras: 
+                        - {name: myname, format: myfmt, src: mysrc}
+                -- Defaults customizable (unlike hub, sur_key is mandatory, when not set reverts back to defaults)
+                    sur_key: {name: <name>_key, format: number(9), seq: <name>_seq}
+                    for_keys: {name: <hubs.primary_key.name>, src: <hubs.nat_keys.src> (list of list)}
+                -- Hardcoded 
+                    for_keys: {format: <hubs.primary_key.format>}
+                    nat_keys_join: derived_from_code
+                    keys_join: derived_from_code
+            Sat:   
+                -- Mandatory
+                    hub: myhub
+                    src: mysrc
+                -- Optional
+                    atts: 
+                        - {name: myname, format: myfmt, src: mysrc}
+                    lfc: {src: mysrc}
+                -- Defaults customizable (when lfc.exp not needed simply set = Null
+                    lfc: {name: effective_date, exp: expiration_date, format: date}
+                    for_key: {name: <hub.primary_key.name>, src: <hub.nat_keys.src>}
+                -- hardcoded in program logic 
+                    for_key: {format: <hub.primary_key.format>}
+                    primary_key: {name: derived(see code), format: derived}
+
+                
+        globals:
+            target_schema: my_schema  
